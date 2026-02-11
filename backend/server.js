@@ -14,8 +14,10 @@ const PORT = process.env.PORT || 3001;
 app.use(cors({
   origin: [
     'http://localhost:8000',
-    'https://table-manager.vercel.app', // Update with your frontend URL
-    /\.vercel\.app$/ // Allow all Vercel preview deployments
+    'https://table-manager.vercel.app', // Vercel
+    'https://table-manager.onrender.com', // Render frontend
+    /\.vercel\.app$/, // All Vercel preview deployments
+    /\.onrender\.com$/ // All Render deployments
   ],
   credentials: true
 }));
@@ -27,15 +29,25 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.NODE_ENV === 'production' ? {
     rejectUnauthorized: false
-  } : false
+  } : false,
+  // Connection pool settings
+  max: 20, // Maximum connections
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000,
 });
 
-// Test database connection
+// Test database connection and handle errors
+pool.on('error', (err) => {
+  console.error('Unexpected database error:', err);
+});
+
 pool.query('SELECT NOW()', (err, res) => {
   if (err) {
-    console.error('Database connection error:', err);
+    console.error('❌ Database connection error:', err.message);
+    console.error('Please check your DATABASE_URL environment variable');
+    // Don't exit - let Render retry
   } else {
-    console.log('Connected to PostgreSQL database');
+    console.log('✅ Connected to PostgreSQL database at:', new Date(res.rows[0].now).toISOString());
     initializeDatabase();
   }
 });
@@ -518,13 +530,35 @@ app.get('/guest/:qrCode', (req, res) => {
   res.redirect(`/#/guest/${req.params.qrCode}`);
 });
 
-// Start server (for local development)
-if (process.env.NODE_ENV !== 'production') {
-  app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    console.log(`API available at http://localhost:${PORT}/api`);
-  });
-}
+// Start server
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server running on port ${PORT}`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`API available at http://localhost:${PORT}/api`);
+});
 
-// Export for Vercel serverless
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, closing server...');
+  server.close(() => {
+    console.log('Server closed');
+    pool.end(() => {
+      console.log('Database pool closed');
+      process.exit(0);
+    });
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT received, closing server...');
+  server.close(() => {
+    console.log('Server closed');
+    pool.end(() => {
+      console.log('Database pool closed');
+      process.exit(0);
+    });
+  });
+});
+
+// Export for compatibility
 module.exports = app;
