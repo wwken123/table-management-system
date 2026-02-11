@@ -13,11 +13,9 @@ const PORT = process.env.PORT || 3001;
 // Middleware
 app.use(cors({
   origin: [
-    'http://localhost:8000',
-    'https://table-manager.vercel.app', // Vercel
-    'https://table-manager.onrender.com', // Render frontend
-    /\.vercel\.app$/, // All Vercel preview deployments
-    /\.onrender\.com$/ // All Render deployments
+  'http://localhost:8000',
+  'https://table-manager-frontend.onrender.com', // Add this!
+  /\.onrender\.com$/
   ],
   credentials: true
 }));
