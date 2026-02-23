@@ -100,11 +100,42 @@ async function initializeDatabase() {
       )
     `);
 
+    // Seat assignments table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS seat_assignments (
+        id SERIAL PRIMARY KEY,
+        table_id INTEGER NOT NULL,
+        seat_number INTEGER NOT NULL,
+        guest_id INTEGER,
+        FOREIGN KEY (table_id) REFERENCES tables(id) ON DELETE CASCADE,
+        FOREIGN KEY (guest_id) REFERENCES guests(id) ON DELETE SET NULL,
+        UNIQUE(table_id, seat_number)
+      )
+    `);
+
+    // Layout icons table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS layout_icons (
+        id SERIAL PRIMARY KEY,
+        event_id INTEGER NOT NULL,
+        icon_type TEXT NOT NULL,
+        position_x REAL NOT NULL,
+        position_y REAL NOT NULL,
+        size INTEGER DEFAULT 60,
+        rotation REAL DEFAULT 0,
+        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+      )
+    `);
+    // Add rotation column if table existed before this column was introduced
+    await pool.query(`ALTER TABLE layout_icons ADD COLUMN IF NOT EXISTS rotation REAL DEFAULT 0`);
+
     // Create indexes
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_guests_event ON guests(event_id)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_guests_table ON guests(table_id)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_guests_qr ON guests(qr_code)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_tables_event ON tables(event_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_seat_assignments_table ON seat_assignments(table_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_layout_icons_event ON layout_icons(event_id)`);
 
     console.log('Database schema initialized successfully');
   } catch (err) {
@@ -116,16 +147,16 @@ async function initializeDatabase() {
 
 // Create new event
 app.post('/api/events', async (req, res) => {
-  const { name, date, venue } = req.body;
-  
+  const { name, date, venue, start_time, end_time } = req.body;
+
   if (!name || !date) {
     return res.status(400).json({ error: 'Name and date are required' });
   }
 
   try {
     const result = await pool.query(
-      `INSERT INTO events (name, date, venue) VALUES ($1, $2, $3) RETURNING *`,
-      [name, date, venue]
+      `INSERT INTO events (name, date, venue, start_time, end_time) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [name, date, venue, start_time || null, end_time || null]
     );
     
     res.json({
@@ -515,6 +546,161 @@ app.get('/api/guest/:qrCode/layout', async (req, res) => {
       tables: tablesResult.rows,
       guestTableId: guest.table_id
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==================== SEAT ASSIGNMENT ROUTES ====================
+
+// Assign guest to specific seat
+app.post('/api/tables/:tableId/seats', async (req, res) => {
+  const { tableId } = req.params;
+  const { seat_number, guest_id } = req.body;
+  
+  try {
+    // Remove existing assignment for this seat if any
+    await pool.query(
+      `DELETE FROM seat_assignments WHERE table_id = $1 AND seat_number = $2`,
+      [tableId, seat_number]
+    );
+    
+    // Create new assignment
+    const result = await pool.query(
+      `INSERT INTO seat_assignments (table_id, seat_number, guest_id) 
+       VALUES ($1, $2, $3) RETURNING *`,
+      [tableId, seat_number, guest_id]
+    );
+    
+    res.json({ message: 'Seat assigned successfully', assignment: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get all seat assignments for a table
+app.get('/api/tables/:tableId/seats', async (req, res) => {
+  const { tableId } = req.params;
+  
+  try {
+    const result = await pool.query(`
+      SELECT 
+        sa.id,
+        sa.seat_number,
+        sa.guest_id,
+        g.name as guest_name,
+        g.party_size
+      FROM seat_assignments sa
+      LEFT JOIN guests g ON sa.guest_id = g.id
+      WHERE sa.table_id = $1
+      ORDER BY sa.seat_number
+    `, [tableId]);
+    
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Remove seat assignment
+app.delete('/api/tables/:tableId/seats/:seatNumber', async (req, res) => {
+  const { tableId, seatNumber } = req.params;
+  
+  try {
+    await pool.query(
+      `DELETE FROM seat_assignments WHERE table_id = $1 AND seat_number = $2`,
+      [tableId, seatNumber]
+    );
+    
+    res.json({ message: 'Seat assignment removed' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==================== LAYOUT ICONS ROUTES ====================
+
+// Add layout icon
+app.post('/api/events/:eventId/icons', async (req, res) => {
+  const { eventId } = req.params;
+  const { icon_type, position_x, position_y, size, rotation } = req.body;
+  
+  try {
+    const result = await pool.query(
+      `INSERT INTO layout_icons (event_id, icon_type, position_x, position_y, size, rotation) 
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [eventId, icon_type, position_x, position_y, size || 60, rotation || 0]
+    );
+    
+    res.json({ message: 'Icon added successfully', icon: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get all icons for event
+app.get('/api/events/:eventId/icons', async (req, res) => {
+  const { eventId } = req.params;
+  
+  try {
+    const result = await pool.query(
+      `SELECT * FROM layout_icons WHERE event_id = $1 ORDER BY created_at`,
+      [eventId]
+    );
+    
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update icon position
+app.put('/api/icons/:id/position', async (req, res) => {
+  const { id } = req.params;
+  const { position_x, position_y } = req.body;
+  
+  try {
+    await pool.query(
+      `UPDATE layout_icons SET position_x = $1, position_y = $2 WHERE id = $3`,
+      [position_x, position_y, id]
+    );
+    
+    res.json({ message: 'Icon position updated' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete icon
+app.delete('/api/icons/:id', async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    await pool.query(`DELETE FROM layout_icons WHERE id = $1`, [id]);
+    res.json({ message: 'Icon deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==================== EVENT TIMES ROUTES ====================
+
+// Update event times
+app.put('/api/events/:id/times', async (req, res) => {
+  const { id } = req.params;
+  const { start_time, end_time } = req.body;
+  
+  try {
+    const result = await pool.query(
+      `UPDATE events SET start_time = $1, end_time = $2 WHERE id = $3 RETURNING *`,
+      [start_time, end_time, id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+    
+    res.json({ message: 'Event times updated', event: result.rows[0] });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
