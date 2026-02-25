@@ -21,7 +21,7 @@ app.use(cors({
   ],
   credentials: true
 }));
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 app.use(express.static('public'));
 
 // PostgreSQL connection pool
@@ -140,6 +140,7 @@ async function initializeDatabase() {
     await pool.query(`ALTER TABLE tables ADD COLUMN IF NOT EXISTS height INTEGER DEFAULT NULL`);
     await pool.query(`ALTER TABLE tables ADD COLUMN IF NOT EXISTS rotation REAL DEFAULT 0`);
     await pool.query(`ALTER TABLE tables ADD COLUMN IF NOT EXISTS seat_sides_config TEXT DEFAULT NULL`);
+    await pool.query(`ALTER TABLE events ADD COLUMN IF NOT EXISTS layout_image TEXT DEFAULT NULL`);
 
     // Create indexes
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_guests_event ON guests(event_id)`);
@@ -250,6 +251,22 @@ app.put('/api/events/:id', async (req, res) => {
     }
 
     res.json({ message: 'Event updated successfully', event: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update venue layout background image
+app.put('/api/events/:id/layout-image', async (req, res) => {
+  const { id } = req.params;
+  const { layout_image } = req.body;
+  try {
+    const result = await pool.query(
+      `UPDATE events SET layout_image = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id, layout_image`,
+      [layout_image || null, id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Event not found' });
+    res.json({ message: 'Layout image updated', event: result.rows[0] });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

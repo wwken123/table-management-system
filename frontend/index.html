@@ -192,6 +192,7 @@
         cursor: move;
         user-select: none;
         transition: all 0.2s;
+        z-index: 1;
 
         /* NEW - Make tables round */
         border-radius: 50%;
@@ -291,6 +292,7 @@
         flex-direction: column;
         align-items: center;
         gap: 3px;
+        z-index: 2;
         z-index: 5;
         transition: filter 0.15s;
       }
@@ -1026,6 +1028,7 @@
               {activeTab === "tables" && (
                 <TablesTab
                   eventId={eventId}
+                  event={event}
                   tables={tables}
                   setTables={setTables}
                   guests={guests}
@@ -1129,9 +1132,49 @@
       ];
 
       // Tables Tab
-      function TablesTab({ eventId, tables, setTables, guests, icons, setIcons, onRefresh }) {
+      function TablesTab({ eventId, event, tables, setTables, guests, icons, setIcons, onRefresh }) {
         const [showCreateModal, setShowCreateModal] = useState(false);
         const [selectedTable, setSelectedTable] = useState(null);
+
+        // Venue layout background image
+        const [layoutImage, setLayoutImage] = React.useState(event?.layout_image || null);
+        const [imageOpacity, setImageOpacity] = React.useState(40);
+        const layoutImageInputRef = React.useRef(null);
+
+        // Sync when event prop changes (e.g. after onRefresh)
+        React.useEffect(() => {
+          setLayoutImage(event?.layout_image || null);
+        }, [event?.layout_image]);
+
+        const handleLayoutImageUpload = (e) => {
+          const file = e.target.files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = async (ev) => {
+            const dataUrl = ev.target.result;
+            setLayoutImage(dataUrl);
+            try {
+              await fetch(`${API_BASE}/events/${eventId}/layout-image`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ layout_image: dataUrl }),
+              });
+            } catch (err) { console.error("Failed to save layout image", err); }
+          };
+          reader.readAsDataURL(file);
+          e.target.value = "";
+        };
+
+        const handleRemoveLayoutImage = async () => {
+          setLayoutImage(null);
+          try {
+            await fetch(`${API_BASE}/events/${eventId}/layout-image`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ layout_image: null }),
+            });
+          } catch (err) { console.error("Failed to remove layout image", err); }
+        };
         const [tableNameEdit, setTableNameEdit] = useState("");
         const [capacityEdit, setCapacityEdit] = useState(1);
         const [shapeEdit, setShapeEdit] = useState("circle");
@@ -1535,6 +1578,48 @@
                 >
                   🗑 Clear Layout
                 </button>
+
+                {/* Venue layout background image controls */}
+                <div style={{ display: "flex", alignItems: "center", gap: "6px", marginLeft: "8px", paddingLeft: "8px", borderLeft: "1px solid #e8dfd0" }}>
+                  <input
+                    ref={layoutImageInputRef}
+                    type="file"
+                    accept="image/*"
+                    style={{ display: "none" }}
+                    onChange={handleLayoutImageUpload}
+                  />
+                  <button
+                    className="btn-secondary"
+                    onClick={() => layoutImageInputRef.current?.click()}
+                    title="Upload venue layout as background reference"
+                  >
+                    🖼 {layoutImage ? "Change BG" : "Add BG"}
+                  </button>
+                  {layoutImage && (
+                    <>
+                      <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                        <span style={{ fontSize: "11px", color: "#8b6f47", whiteSpace: "nowrap" }}>Opacity</span>
+                        <input
+                          type="range"
+                          min="10" max="100" step="5"
+                          value={imageOpacity}
+                          onChange={e => setImageOpacity(Number(e.target.value))}
+                          style={{ width: "70px", accentColor: "#d4af37" }}
+                          title={`Background opacity: ${imageOpacity}%`}
+                        />
+                        <span style={{ fontSize: "11px", color: "#8b6f47", minWidth: "30px" }}>{imageOpacity}%</span>
+                      </div>
+                      <button
+                        className="btn-secondary"
+                        onClick={handleRemoveLayoutImage}
+                        style={{ color: "#ef4444" }}
+                        title="Remove background image"
+                      >
+                        ✕ BG
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -1547,6 +1632,23 @@
                   onMouseUp={handleMouseUp}
                   onMouseLeave={handleMouseUp}
                 >
+                  {/* Venue layout background image */}
+                  {layoutImage && (
+                    <img
+                      src={layoutImage}
+                      alt="Venue layout"
+                      style={{
+                        position: "absolute", top: 0, left: 0,
+                        width: "100%", height: "100%",
+                        objectFit: "contain",
+                        opacity: imageOpacity / 100,
+                        pointerEvents: "none",
+                        userSelect: "none",
+                        zIndex: 0,
+                      }}
+                    />
+                  )}
+
                   {/* Layout icons */}
                   {icons.map((icon) => {
                     const def = LAYOUT_ICONS.find((d) => d.type === icon.icon_type) || { emoji: "📌", label: icon.icon_type };
