@@ -297,6 +297,7 @@
         transition: filter 0.15s;
       }
       .layout-icon:hover { filter: drop-shadow(0 4px 8px rgba(0,0,0,0.25)); }
+      .layout-icon.selected { outline: 2px solid #ff6b6b; outline-offset: 3px; border-radius: 6px; }
       .layout-icon-emoji { font-size: 32px; line-height: 1; }
       .layout-icon-label {
         font-size: 10px;
@@ -1298,6 +1299,10 @@
         const [showSeatsEdit, setShowSeatsEdit] = useState(true);
         const [rotationEdit, setRotationEdit] = useState(0);
         const [clipboard, setClipboard] = useState(null);
+        const [selectedIds, setSelectedIds] = useState(new Set());
+        const [selectedIconIds, setSelectedIconIds] = useState(new Set());
+        const [textColorEdit, setTextColorEdit] = useState("");
+        const [borderColorEdit, setBorderColorEdit] = useState("");
 
         const handleShapeChange = (val) => {
           setShapeEdit(val);
@@ -1330,6 +1335,14 @@
           setRotationEdit(val);
           if (selectedTable) setTables(prev => prev.map(t => t.id === selectedTable.id ? { ...t, rotation: val } : t));
         };
+        const handleTextColorChange = (val) => {
+          setTextColorEdit(val);
+          if (selectedTable) setTables(prev => prev.map(t => t.id === selectedTable.id ? { ...t, text_color: val || null } : t));
+        };
+        const handleBorderColorChange = (val) => {
+          setBorderColorEdit(val);
+          if (selectedTable) setTables(prev => prev.map(t => t.id === selectedTable.id ? { ...t, border_color: val || null } : t));
+        };
         // Called by TableDetailPanel after Done saves to DB — only patches defined fields
         // (preserves computed fields like seats_occupied that aren't returned by PUT)
         const handleTableUpdate = (updatedTable) => {
@@ -1341,9 +1354,9 @@
 
         // Copy/paste helpers
         const handleCopy = () => {
-          if (!selectedTable) return;
-          const t = tables.find(tbl => tbl.id === selectedTable.id);
-          if (t) setClipboard({ type: "table", data: { ...t } });
+          const selected = tables.filter(t => selectedIds.has(t.id));
+          if (selected.length === 0) return;
+          setClipboard({ type: "tables", data: selected.map(t => ({ ...t })) });
         };
 
         const getNextTableName = (templateName) => {
@@ -1363,28 +1376,24 @@
         };
 
         const handlePaste = async () => {
-          if (!clipboard || clipboard.type !== "table") return;
-          const t = clipboard.data;
-          const newName = getNextTableName(t.table_name);
+          if (!clipboard || clipboard.type !== "tables") return;
+          const items = clipboard.data;
           try {
-            const createResp = await fetch(`${API_BASE}/events/${eventId}/tables`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ tables: [{ table_name: newName, capacity: t.capacity, shape: t.shape || "circle", purpose: t.purpose || "dining table", color: t.color || "#ffffff", seat_sides: t.seat_sides ?? 2, seat_sides_config: t.seat_sides_config || null, show_seats: t.show_seats ?? true }] }),
-            });
-            const createData = await createResp.json();
-            const newTable = createData.tables?.[0];
-            if (newTable) {
+            const newTables = [];
+            for (const t of items) {
+              const newName = getNextTableName(t.table_name);
               const newX = Math.min((t.position_x || 0) + 30, layoutWidth - 100);
               const newY = Math.min((t.position_y || 0) + 30, layoutHeight - 80);
-              await fetch(`${API_BASE}/tables/${newTable.id}/position`, {
-                method: "PUT",
+              const createResp = await fetch(`${API_BASE}/events/${eventId}/tables`, {
+                method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ position_x: newX, position_y: newY }),
+                body: JSON.stringify({ tables: [{ table_name: newName, capacity: t.capacity, shape: t.shape || "circle", purpose: t.purpose || "dining table", color: t.color || "#ffffff", seat_sides: t.seat_sides ?? 2, seat_sides_config: t.seat_sides_config || null, show_seats: t.show_seats ?? true, width: t.width || null, height: t.height || null, text_color: t.text_color || null, border_color: t.border_color || null, position_x: newX, position_y: newY }] }),
               });
-              // Append to existing state — do NOT overwrite (would lose other tables' local shapes)
-              setTables(prev => [...prev, { ...newTable, position_x: newX, position_y: newY, seats_occupied: 0 }]);
+              const createData = await createResp.json();
+              const newTable = createData.tables?.[0];
+              if (newTable) newTables.push({ ...newTable, position_x: newX, position_y: newY, seats_occupied: 0 });
             }
+            if (newTables.length > 0) setTables(prev => [...prev, ...newTables]);
           } catch (err) {
             console.error("Error pasting:", err);
           }
@@ -1454,7 +1463,7 @@
                   body: JSON.stringify({
                     table_name: t.table_name, capacity: t.capacity,
                     shape: t.shape || "circle", purpose: t.purpose || "dining table",
-                    color: t.color || "#ffffff",
+                    color: t.color || "#ffffff", text_color: t.text_color || null, border_color: t.border_color || null,
                     seat_sides: t.seat_sides ?? 2, seat_sides_config: t.seat_sides_config || null,
                     show_seats: t.show_seats ?? true,
                     width: t.width || null, height: t.height || null, rotation: t.rotation ?? 0,
@@ -1504,10 +1513,127 @@
           }
         };
 
+        const handleDeleteSelected = async () => {
+          if (selectedIds.size === 0 && selectedIconIds.size === 0) return;
+          const tableNames = tables.filter(t => selectedIds.has(t.id)).map(t => t.table_name);
+          const iconCount = selectedIconIds.size;
+          let msg = '';
+          if (tableNames.length > 0 && iconCount > 0) msg = `Delete ${tableNames.join(', ')} and ${iconCount} icon(s)?`;
+          else if (tableNames.length > 0) msg = `Delete ${tableNames.join(', ')}?`;
+          else msg = `Delete ${iconCount} icon(s)?`;
+          if (!confirm(msg + ' This cannot be undone.')) return;
+          try {
+            await Promise.all([
+              ...[...selectedIds].map(id => fetch(`${API_BASE}/tables/${id}`, { method: "DELETE" })),
+              ...[...selectedIconIds].map(id => fetch(`${API_BASE}/icons/${id}`, { method: "DELETE" })),
+            ]);
+            setTables(prev => prev.filter(t => !selectedIds.has(t.id)));
+            setIcons(prev => prev.filter(ic => !selectedIconIds.has(ic.id)));
+            setSelectedIds(new Set());
+            setSelectedIconIds(new Set());
+            setSelectedTable(null);
+          } catch (error) {
+            alert("Error deleting selected items");
+          }
+        };
+
+        React.useEffect(() => {
+          const onKeyDown = (e) => {
+            if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
+            if ((e.ctrlKey || e.metaKey) && e.key === "a") {
+              e.preventDefault();
+              setSelectedIds(new Set(tables.map(t => t.id)));
+              setSelectedIconIds(new Set(icons.map(ic => ic.id)));
+              setSelectedTable(null);
+              return;
+            }
+            if ((e.ctrlKey || e.metaKey) && e.key === "c") {
+              const selected = tables.filter(t => selectedIds.has(t.id));
+              if (selected.length > 0) setClipboard({ type: "tables", data: selected.map(t => ({ ...t })) });
+              return;
+            }
+            if ((e.ctrlKey || e.metaKey) && e.key === "v") {
+              if (clipboard && clipboard.type === "tables") {
+                (async () => {
+                  const items = clipboard.data;
+                  try {
+                    const newTbls = [];
+                    for (const t of items) {
+                      const baseName = t.table_name;
+                      const match = baseName.match(/^(.*?)(\d+)$/);
+                      let newName;
+                      if (match) {
+                        const pf = match[1];
+                        const nums = tables.map(tbl => { const m = tbl.table_name.match(/^(.*?)(\d+)$/); return (m && m[1] === pf) ? parseInt(m[2]) : 0; }).filter(n => n > 0);
+                        newName = `${pf}${(nums.length > 0 ? Math.max(...nums) : 0) + 1}`;
+                      } else {
+                        let counter = 2;
+                        while (tables.some(tbl => tbl.table_name === `${baseName} ${counter}`)) counter++;
+                        newName = `${baseName} ${counter}`;
+                      }
+                      const newX = Math.min((t.position_x || 0) + 30, layoutWidth - 100);
+                      const newY = Math.min((t.position_y || 0) + 30, layoutHeight - 80);
+                      const resp = await fetch(`${API_BASE}/events/${eventId}/tables`, {
+                        method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ tables: [{ table_name: newName, capacity: t.capacity, shape: t.shape || "circle", purpose: t.purpose || "dining table", color: t.color || "#ffffff", seat_sides: t.seat_sides ?? 2, seat_sides_config: t.seat_sides_config || null, show_seats: t.show_seats ?? true, width: t.width || null, height: t.height || null, text_color: t.text_color || null, border_color: t.border_color || null, position_x: newX, position_y: newY }] }),
+                      });
+                      const d = await resp.json();
+                      const nt = d.tables?.[0];
+                      if (nt) newTbls.push({ ...nt, position_x: newX, position_y: newY, seats_occupied: 0 });
+                    }
+                    if (newTbls.length > 0) setTables(prev => [...prev, ...newTbls]);
+                  } catch (err) { console.error("Error pasting:", err); }
+                })();
+              }
+              return;
+            }
+            if ((e.key === "Delete" || e.key === "Backspace") && (selectedIds.size > 0 || selectedIconIds.size > 0)) {
+              e.preventDefault();
+              const tableNames = tables.filter(t => selectedIds.has(t.id)).map(t => t.table_name);
+              const iconCount = selectedIconIds.size;
+              let msg = '';
+              if (tableNames.length > 0 && iconCount > 0) msg = `Delete ${tableNames.join(', ')} and ${iconCount} icon(s)?`;
+              else if (tableNames.length > 0) msg = `Delete ${tableNames.join(', ')}?`;
+              else msg = `Delete ${iconCount} icon(s)?`;
+              if (!confirm(msg + ' This cannot be undone.')) return;
+              (async () => {
+                try {
+                  await Promise.all([
+                    ...[...selectedIds].map(id => fetch(`${API_BASE}/tables/${id}`, { method: "DELETE" })),
+                    ...[...selectedIconIds].map(id => fetch(`${API_BASE}/icons/${id}`, { method: "DELETE" })),
+                  ]);
+                  setTables(prev => prev.filter(t => !selectedIds.has(t.id)));
+                  setIcons(prev => prev.filter(ic => !selectedIconIds.has(ic.id)));
+                  setSelectedIds(new Set());
+                  setSelectedIconIds(new Set());
+                  setSelectedTable(null);
+                } catch { alert("Error deleting selected items"); }
+              })();
+              return;
+            }
+            if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key) && (selectedIds.size > 0 || selectedIconIds.size > 0)) {
+              e.preventDefault();
+              const delta = e.shiftKey ? 10 : 1;
+              const dx = e.key === "ArrowLeft" ? -delta : e.key === "ArrowRight" ? delta : 0;
+              const dy = e.key === "ArrowUp" ? -delta : e.key === "ArrowDown" ? delta : 0;
+              setTables(prev => prev.map(t => selectedIds.has(t.id) ? { ...t, position_x: Math.max(0, t.position_x + dx), position_y: Math.max(0, t.position_y + dy) } : t));
+              setIcons(prev => prev.map(ic => selectedIconIds.has(ic.id) ? { ...ic, position_x: Math.max(0, ic.position_x + dx), position_y: Math.max(0, ic.position_y + dy) } : ic));
+              return;
+            }
+            if (e.key === "Escape") {
+              setSelectedIds(new Set());
+              setSelectedIconIds(new Set());
+              setSelectedTable(null);
+            }
+          };
+          window.addEventListener('keydown', onKeyDown);
+          return () => window.removeEventListener('keydown', onKeyDown);
+        }, [selectedIds, selectedIconIds, tables, icons, clipboard, layoutWidth, layoutHeight, eventId]);
+
         // Table drag handlers
         const handleTableMouseDown = (e, table) => {
           const rect = e.currentTarget.getBoundingClientRect();
-          setDragOffset({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+          setDragOffset({ x: e.clientX - rect.left, y: e.clientY - rect.top, ctrlKey: e.ctrlKey || e.metaKey });
           setDraggedTable(table);
           setTableDragMoved(false);
         };
@@ -1558,7 +1684,7 @@
                 await fetch(`${API_BASE}/tables/${t.id}`, {
                   method: "PUT",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ table_name: t.table_name, capacity: t.capacity, shape: t.shape || "circle", purpose: t.purpose || "dining table", color: t.color || "#ffffff", seat_sides: t.seat_sides ?? 2, seat_sides_config: t.seat_sides_config || null, show_seats: t.show_seats ?? true, width: t.width, height: t.height, rotation: t.rotation ?? 0 }),
+                  body: JSON.stringify({ table_name: t.table_name, capacity: t.capacity, shape: t.shape || "circle", purpose: t.purpose || "dining table", color: t.color || "#ffffff", text_color: t.text_color || null, border_color: t.border_color || null, seat_sides: t.seat_sides ?? 2, seat_sides_config: t.seat_sides_config || null, show_seats: t.show_seats ?? true, width: t.width, height: t.height, rotation: t.rotation ?? 0 }),
                 });
               } catch (error) { console.error("Error saving resize:", error); }
             }
@@ -1569,16 +1695,30 @@
 
           if (draggedTable) {
             if (!tableDragMoved) {
-              // It was a click, not a drag → open detail panel
-              setSelectedTable(draggedTable);
-              setTableNameEdit(draggedTable.table_name);
-              setCapacityEdit(draggedTable.capacity);
-              setShapeEdit(draggedTable.shape || "circle");
-              setPurposeEdit(draggedTable.purpose || "dining table");
-              setColorEdit(draggedTable.color || "#ffffff");
-              setSeatSidesConfigEdit([...parseSeatSides(draggedTable)].join(',') || 'top');
-              setShowSeatsEdit(draggedTable.show_seats ?? true);
-              setRotationEdit(draggedTable.rotation ?? 0);
+              if (dragOffset.ctrlKey) {
+                // Ctrl+Click: toggle in multi-select
+                setSelectedIds(prev => {
+                  const next = new Set(prev);
+                  if (next.has(draggedTable.id)) next.delete(draggedTable.id);
+                  else next.add(draggedTable.id);
+                  return next;
+                });
+                setSelectedTable(null);
+              } else {
+                // Normal click: single select + open detail panel
+                setSelectedIds(new Set([draggedTable.id]));
+                setSelectedTable(draggedTable);
+                setTableNameEdit(draggedTable.table_name);
+                setCapacityEdit(draggedTable.capacity);
+                setShapeEdit(draggedTable.shape || "circle");
+                setPurposeEdit(draggedTable.purpose || "dining table");
+                setColorEdit(draggedTable.color || "#ffffff");
+                setTextColorEdit(draggedTable.text_color || "");
+                setBorderColorEdit(draggedTable.border_color || "");
+                setSeatSidesConfigEdit([...parseSeatSides(draggedTable)].join(',') || 'top');
+                setShowSeatsEdit(draggedTable.show_seats ?? true);
+                setRotationEdit(draggedTable.rotation ?? 0);
+              }
             } else {
               try {
                 await fetch(`${API_BASE}/tables/${draggedTable.id}/position`, {
@@ -1611,6 +1751,15 @@
 
         const handleIconMouseDown = (e, icon) => {
           e.stopPropagation();
+          if (e.ctrlKey || e.metaKey) {
+            setSelectedIconIds(prev => {
+              const next = new Set(prev);
+              if (next.has(icon.id)) next.delete(icon.id);
+              else next.add(icon.id);
+              return next;
+            });
+            return;
+          }
           const rect = e.currentTarget.getBoundingClientRect();
           setIconDragOffset({ x: e.clientX - rect.left, y: e.clientY - rect.top });
           setDraggedIcon(icon);
@@ -1670,9 +1819,9 @@
                 <button
                   onClick={handleCopy}
                   className="btn-secondary"
-                  disabled={!selectedTable}
-                  style={{ opacity: selectedTable ? 1 : 0.4 }}
-                  title={selectedTable ? `Copy ${selectedTable.table_name}` : "Select a table first"}
+                  disabled={selectedIds.size === 0}
+                  style={{ opacity: selectedIds.size > 0 ? 1 : 0.4 }}
+                  title={selectedIds.size > 0 ? `Copy ${selectedIds.size} table(s)` : "Select a table first"}
                 >
                   📋 Copy
                 </button>
@@ -1681,10 +1830,20 @@
                   className="btn-secondary"
                   disabled={!clipboard}
                   style={{ opacity: clipboard ? 1 : 0.4 }}
-                  title={clipboard ? `Paste ${clipboard.data.table_name}` : "Nothing copied yet"}
+                  title={clipboard ? `Paste ${clipboard.data.length} table(s)` : "Nothing copied yet"}
                 >
                   📌 Paste
                 </button>
+                {(selectedIds.size > 0 || selectedIconIds.size > 0) && (
+                  <button
+                    onClick={handleDeleteSelected}
+                    className="btn-secondary"
+                    style={{ color: "#ef4444" }}
+                    title={`Delete ${selectedIds.size + selectedIconIds.size} selected item(s) (Del)`}
+                  >
+                    🗑 Delete ({selectedIds.size + selectedIconIds.size})
+                  </button>
+                )}
                 <button
                   onClick={handleClearLayout}
                   className="btn-secondary"
@@ -1744,11 +1903,16 @@
               </div>
             </div>
 
+            <div style={{ fontSize: "11px", color: "#aaa", marginBottom: "4px", userSelect: "none" }}>
+              Click table to select · Ctrl+Click to multi-select · Ctrl+A select all · Ctrl+C copy · Ctrl+V paste · Del delete · Arrow keys move · Shift+Arrow ×10
+            </div>
+
             <div style={{ position: "relative" }}>
                 <div
                   ref={canvasRef}
                   className="canvas-container"
                   style={{ width: `${layoutWidth}px`, height: `${layoutHeight}px`, maxWidth: "100%", overflowX: "auto" }}
+                  onMouseDown={(e) => { if (e.target === canvasRef.current) { setSelectedIds(new Set()); setSelectedIconIds(new Set()); setSelectedTable(null); } }}
                   onMouseMove={handleMouseMove}
                   onMouseUp={handleMouseUp}
                   onMouseLeave={handleMouseUp}
@@ -1776,7 +1940,7 @@
                     return (
                       <div
                         key={icon.id}
-                        className="layout-icon"
+                        className={`layout-icon${selectedIconIds.has(icon.id) ? " selected" : ""}`}
                         style={{ left: `${icon.position_x}px`, top: `${icon.position_y}px` }}
                         onMouseDown={(e) => handleIconMouseDown(e, icon)}
                       >
@@ -1866,8 +2030,8 @@
                     return (
                       <div
                         key={table.id}
-                        className={`draggable-table${selectedTable && selectedTable.id === table.id ? " selected" : ""}`}
-                        style={{ left: `${table.position_x}px`, top: `${table.position_y}px`, overflow: "visible", background: tableColor, ...shapeStyle }}
+                        className={`draggable-table${selectedIds.has(table.id) ? " selected" : ""}`}
+                        style={{ left: `${table.position_x}px`, top: `${table.position_y}px`, overflow: "visible", background: tableColor, border: table.border_color ? `3px solid ${table.border_color}` : undefined, ...shapeStyle }}
                         onMouseDown={(e) => handleTableMouseDown(e, table)}
                       >
                         {seatPositions.map((pos, i) => {
@@ -1880,7 +2044,7 @@
                             </div>
                           );
                         })}
-                        <div className="font-bold text-primary" style={{ fontSize: "13px" }}>{table.table_name}</div>
+                        <div className="font-bold text-primary" style={{ fontSize: "13px", color: table.text_color || undefined }}>{table.table_name}</div>
                         {isDining && n > 0 && (
                           <div className="text-secondary" style={{ fontSize: "10px" }}>{table.seats_occupied}/{n}</div>
                         )}
@@ -1917,6 +2081,10 @@
                       setPurpose={handlePurposeChange}
                       color={colorEdit}
                       setColor={handleColorChange}
+                      textColor={textColorEdit}
+                      setTextColor={handleTextColorChange}
+                      borderColor={borderColorEdit}
+                      setBorderColor={handleBorderColorChange}
                       seatSidesConfig={seatSidesConfigEdit}
                       setSeatSidesConfig={handleSeatSidesConfigChange}
                       showSeats={showSeatsEdit}
@@ -1924,7 +2092,7 @@
                       rotation={rotationEdit}
                       setRotation={handleRotationChange}
                       onTableUpdate={handleTableUpdate}
-                      onClose={() => setSelectedTable(null)}
+                      onClose={() => { setSelectedTable(null); setSelectedIds(new Set()); }}
                       onRefresh={onRefresh}
                       onDelete={handleDeleteTable}
                       onPositionChange={handlePositionChange}
@@ -2031,7 +2199,7 @@
       }
 
       // Table Detail Panel
-      function TableDetailPanel({ table, guests, tableName, setTableName, capacity, setCapacity, shape, setShape, purpose, setPurpose, color, setColor, seatSidesConfig, setSeatSidesConfig, showSeats, setShowSeats, rotation, setRotation, onTableUpdate, onClose, onRefresh, onDelete, onPositionChange }) {
+      function TableDetailPanel({ table, guests, tableName, setTableName, capacity, setCapacity, shape, setShape, purpose, setPurpose, color, setColor, textColor, setTextColor, borderColor, setBorderColor, seatSidesConfig, setSeatSidesConfig, showSeats, setShowSeats, rotation, setRotation, onTableUpdate, onClose, onRefresh, onDelete, onPositionChange }) {
 
         const SEAT_CACHE_KEY = `seat_assignments_${table.id}`;
 
@@ -2313,6 +2481,8 @@
             shape,
             purpose,
             color,
+            text_color: textColor || null,
+            border_color: borderColor || null,
             seat_sides: (seatSidesConfig || '').split(',').filter(Boolean).length,
             seat_sides_config: seatSidesConfig,
             show_seats: showSeats,
@@ -2328,7 +2498,7 @@
             await fetch(`${API_BASE}/tables/${table.id}`, {
               method: "PUT",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ table_name: tableName, capacity: parseInt(capacity), shape, purpose, color, seat_sides: (seatSidesConfig || '').split(',').filter(Boolean).length, seat_sides_config: seatSidesConfig, show_seats: showSeats, rotation: rotation ?? 0, width: table.width, height: table.height }),
+              body: JSON.stringify({ table_name: tableName, capacity: parseInt(capacity), shape, purpose, color, text_color: textColor || null, border_color: borderColor || null, seat_sides: (seatSidesConfig || '').split(',').filter(Boolean).length, seat_sides_config: seatSidesConfig, show_seats: showSeats, rotation: rotation ?? 0, width: table.width, height: table.height }),
             });
             await fetch(`${API_BASE}/tables/${table.id}/position`, {
               method: "PUT",
@@ -2454,6 +2624,24 @@
                   <label style={{ fontSize: "11px", fontWeight: 600, color: "#888", display: "block", marginBottom: "3px" }}>BODY COLOR</label>
                   <input type="color" value={color} onChange={(e) => setColor(e.target.value)}
                     style={{ width: "100%", height: "32px", padding: "2px", borderRadius: "6px", border: "1px solid #d1d5db", cursor: "pointer" }} />
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ fontSize: "11px", fontWeight: 600, color: "#888", display: "block", marginBottom: "3px" }}>TEXT COLOR</label>
+                  <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+                    <input type="color" value={textColor || "#2c1810"} onChange={(e) => setTextColor(e.target.value)}
+                      style={{ flex: 1, height: "32px", padding: "2px", borderRadius: "6px", border: "1px solid #d1d5db", cursor: "pointer" }} />
+                    {textColor && <button type="button" onClick={() => setTextColor("")} title="Reset to default" style={{ fontSize: "10px", color: "#888", background: "none", border: "none", cursor: "pointer", padding: "2px" }}>✕</button>}
+                  </div>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={{ fontSize: "11px", fontWeight: 600, color: "#888", display: "block", marginBottom: "3px" }}>BORDER COLOR</label>
+                  <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+                    <input type="color" value={borderColor || "#d4af37"} onChange={(e) => setBorderColor(e.target.value)}
+                      style={{ flex: 1, height: "32px", padding: "2px", borderRadius: "6px", border: "1px solid #d1d5db", cursor: "pointer" }} />
+                    {borderColor && <button type="button" onClick={() => setBorderColor("")} title="Reset to default" style={{ fontSize: "10px", color: "#888", background: "none", border: "none", cursor: "pointer", padding: "2px" }}>✕</button>}
+                  </div>
                 </div>
               </div>
               <div>
@@ -2694,20 +2882,40 @@
         const [shape, setShape] = useState("circle");
         const [purpose, setPurpose] = useState("dining table");
         const [color, setColor] = useState("#ffffff");
+        const [textColor, setTextColor] = useState("");
+        const [borderColor, setBorderColor] = useState("");
         const [seatSidesConfig, setSeatSidesConfig] = useState("top,bottom");
         const [showSeats, setShowSeats] = useState(true);
+        const [tableWidth, setTableWidth] = useState(100);
+        const [tableHeight, setTableHeight] = useState(100);
+        const [gridCols, setGridCols] = useState(5);
+
+        const handleShapeChange = (val) => {
+          setShape(val);
+          if (val === "rectangle") { setTableWidth(140); setTableHeight(80); }
+          else { setTableWidth(100); setTableHeight(100); }
+        };
 
         const handleSubmit = (e) => {
           e.preventDefault();
+          const cols = Math.max(1, gridCols);
+          const spacingX = tableWidth + 60;
+          const spacingY = tableHeight + 60;
           const tables = Array.from({ length: numTables }, (_, i) => ({
             table_name: `${prefix}${i + 1}`,
             capacity: seatsPerTable,
             shape,
             purpose,
             color,
+            text_color: textColor || null,
+            border_color: borderColor || null,
             seat_sides: seatSidesConfig.split(',').filter(Boolean).length,
             seat_sides_config: seatSidesConfig,
             show_seats: showSeats,
+            width: tableWidth,
+            height: tableHeight,
+            position_x: 80 + (i % cols) * spacingX,
+            position_y: 80 + Math.floor(i / cols) * spacingY,
           }));
           onSubmit(tables);
         };
@@ -2767,7 +2975,7 @@
                 <div className="flex space-x-3">
                   <div className="flex-1">
                     <label className="block text-sm font-semibold text-primary mb-2">Shape</label>
-                    <select className="input-field" value={shape} onChange={(e) => setShape(e.target.value)}>
+                    <select className="input-field" value={shape} onChange={(e) => handleShapeChange(e.target.value)}>
                       <option value="circle">Circle</option>
                       <option value="rectangle">Rectangle</option>
                     </select>
@@ -2776,6 +2984,44 @@
                     <label className="block text-sm font-semibold text-primary mb-2">Body Color</label>
                     <input type="color" className="input-field" style={{ height: "42px", padding: "4px", cursor: "pointer" }}
                       value={color} onChange={(e) => setColor(e.target.value)} />
+                  </div>
+                </div>
+                <div className="flex space-x-3">
+                  <div className="flex-1">
+                    <label className="block text-sm font-semibold text-primary mb-2">Text Color</label>
+                    <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                      <input type="color" className="input-field" style={{ height: "42px", padding: "4px", cursor: "pointer", flex: 1 }}
+                        value={textColor || "#2c1810"} onChange={(e) => setTextColor(e.target.value)} />
+                      {textColor && <button type="button" onClick={() => setTextColor("")} style={{ fontSize: "11px", color: "#888", background: "none", border: "none", cursor: "pointer" }}>Reset</button>}
+                    </div>
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-sm font-semibold text-primary mb-2">Border Color</label>
+                    <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                      <input type="color" className="input-field" style={{ height: "42px", padding: "4px", cursor: "pointer", flex: 1 }}
+                        value={borderColor || "#d4af37"} onChange={(e) => setBorderColor(e.target.value)} />
+                      {borderColor && <button type="button" onClick={() => setBorderColor("")} style={{ fontSize: "11px", color: "#888", background: "none", border: "none", cursor: "pointer" }}>Reset</button>}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex space-x-3">
+                  <div className="flex-1">
+                    <label className="block text-sm font-semibold text-primary mb-2">Width (px)</label>
+                    <input type="number" min="40" max="500" className="input-field" value={tableWidth}
+                      onChange={(e) => setTableWidth(Math.max(40, parseInt(e.target.value) || 40))} />
+                  </div>
+                  {shape === "rectangle" && (
+                    <div className="flex-1">
+                      <label className="block text-sm font-semibold text-primary mb-2">Height (px)</label>
+                      <input type="number" min="40" max="500" className="input-field" value={tableHeight}
+                        onChange={(e) => setTableHeight(Math.max(40, parseInt(e.target.value) || 40))} />
+                    </div>
+                  )}
+                  <div className="flex-1">
+                    <label className="block text-sm font-semibold text-primary mb-2">Columns</label>
+                    <input type="number" min="1" max="20" className="input-field" value={gridCols}
+                      onChange={(e) => setGridCols(Math.max(1, parseInt(e.target.value) || 1))} />
+                    <p className="text-xs text-secondary mt-1">{Math.ceil(numTables / gridCols)} row(s)</p>
                   </div>
                 </div>
                 <div>

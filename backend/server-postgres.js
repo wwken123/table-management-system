@@ -141,6 +141,8 @@ async function initializeDatabase() {
     await pool.query(`ALTER TABLE tables ADD COLUMN IF NOT EXISTS rotation REAL DEFAULT 0`);
     await pool.query(`ALTER TABLE tables ADD COLUMN IF NOT EXISTS seat_sides_config TEXT DEFAULT NULL`);
     await pool.query(`ALTER TABLE events ADD COLUMN IF NOT EXISTS layout_image TEXT DEFAULT NULL`);
+    await pool.query(`ALTER TABLE tables ADD COLUMN IF NOT EXISTS text_color TEXT DEFAULT NULL`);
+    await pool.query(`ALTER TABLE tables ADD COLUMN IF NOT EXISTS border_color TEXT DEFAULT NULL`);
 
     // Create indexes
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_guests_event ON guests(event_id)`);
@@ -311,12 +313,14 @@ app.post('/api/events/:eventId/tables', async (req, res) => {
       const table = tables[i];
       const row = Math.floor(i / 5);
       const col = i % 5;
-      const x = 100 + (col * 150);
-      const y = 100 + (row * 150);
+      const defaultX = 100 + (col * 150);
+      const defaultY = 100 + (row * 150);
+      const x = (table.position_x != null) ? table.position_x : defaultX;
+      const y = (table.position_y != null) ? table.position_y : defaultY;
 
       const result = await client.query(
-        `INSERT INTO tables (event_id, table_name, capacity, position_x, position_y, shape, purpose, color, seat_sides, seat_sides_config, show_seats) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
-        [eventId, table.table_name, table.capacity, x, y, table.shape || 'circle', table.purpose || 'dining table', table.color || '#ffffff', table.seat_sides ?? 2, table.seat_sides_config || null, table.show_seats ?? true]
+        `INSERT INTO tables (event_id, table_name, capacity, position_x, position_y, shape, purpose, color, seat_sides, seat_sides_config, show_seats, width, height, text_color, border_color) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
+        [eventId, table.table_name, table.capacity, x, y, table.shape || 'circle', table.purpose || 'dining table', table.color || '#ffffff', table.seat_sides ?? 2, table.seat_sides_config || null, table.show_seats ?? true, table.width || null, table.height || null, table.text_color || null, table.border_color || null]
       );
       createdTables.push(result.rows[0]);
       created++;
@@ -358,12 +362,12 @@ app.get('/api/events/:eventId/tables', async (req, res) => {
 // Update table
 app.put('/api/tables/:id', async (req, res) => {
   const { id } = req.params;
-  const { table_name, capacity, shape, purpose, color, seat_sides, seat_sides_config, show_seats, width, height, rotation } = req.body;
+  const { table_name, capacity, shape, purpose, color, seat_sides, seat_sides_config, show_seats, width, height, rotation, text_color, border_color } = req.body;
 
   try {
     const result = await pool.query(
-      `UPDATE tables SET table_name = $1, capacity = $2, shape = $3, purpose = $4, color = $5, seat_sides = $6, seat_sides_config = $7, show_seats = $8, width = $9, height = $10, rotation = $11 WHERE id = $12 RETURNING *`,
-      [table_name, capacity, shape || 'circle', purpose || 'dining table', color || '#ffffff', seat_sides ?? 2, seat_sides_config || null, show_seats ?? true, width || null, height || null, rotation ?? 0, id]
+      `UPDATE tables SET table_name = $1, capacity = $2, shape = $3, purpose = $4, color = $5, seat_sides = $6, seat_sides_config = $7, show_seats = $8, width = $9, height = $10, rotation = $11, text_color = $12, border_color = $13 WHERE id = $14 RETURNING *`,
+      [table_name, capacity, shape || 'circle', purpose || 'dining table', color || '#ffffff', seat_sides ?? 2, seat_sides_config || null, show_seats ?? true, width || null, height || null, rotation ?? 0, text_color || null, border_color || null, id]
     );
 
     if (result.rows.length === 0) {
