@@ -594,6 +594,7 @@
           }
         };
 
+
         if (loading) {
           return (
             <div className="flex justify-center items-center h-96">
@@ -658,7 +659,7 @@
                       {event.name}
                     </h3>
                     <p className="text-secondary mb-4">
-                      📍 {event.venue || "Venue TBD"}
+                      📍 {event.venue || "Venue TBC"}
                     </p>
                     <div className="flex items-center justify-between pt-4 border-t border-border">
                       <span className="text-sm text-secondary">
@@ -795,6 +796,73 @@
         );
       }
 
+      // Edit Event Modal
+      function EditEventModal({ event, onClose, onSuccess }) {
+        const [formData, setFormData] = useState({
+          name: event.name || "",
+          date: event.date || "",
+          start_time: event.start_time || "",
+          end_time: event.end_time || "",
+          venue: event.venue || "",
+        });
+
+        const handleSubmit = async (e) => {
+          e.preventDefault();
+          try {
+            const res = await fetch(`${API_BASE}/events/${event.id}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(formData),
+            });
+            const data = await res.json();
+            onSuccess(data.event);
+          } catch (error) {
+            console.error("Error updating event:", error);
+          }
+        };
+
+        return (
+          <div className="qr-modal" onClick={onClose}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+              <h3 className="font-serif text-3xl font-bold text-primary mb-6">Edit Event</h3>
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-semibold text-primary mb-2">Event Name *</label>
+                  <input type="text" required className="input-field" value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })} />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-primary mb-2">Date *</label>
+                  <input type="date" required className="input-field" value={formData.date}
+                    onChange={(e) => setFormData({ ...formData, date: e.target.value })} />
+                </div>
+                <div className="flex space-x-3">
+                  <div className="flex-1">
+                    <label className="block text-sm font-semibold text-primary mb-2">Start Time</label>
+                    <input type="time" className="input-field" value={formData.start_time}
+                      onChange={(e) => setFormData({ ...formData, start_time: e.target.value })} />
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-sm font-semibold text-primary mb-2">End Time</label>
+                    <input type="time" className="input-field" value={formData.end_time}
+                      onChange={(e) => setFormData({ ...formData, end_time: e.target.value })} />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-primary mb-2">Venue</label>
+                  <input type="text" className="input-field" value={formData.venue}
+                    onChange={(e) => setFormData({ ...formData, venue: e.target.value })} />
+                </div>
+                <div className="flex space-x-3 pt-4">
+                  <button type="submit" className="btn-primary flex-1">Save Changes</button>
+                  <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancel</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        );
+      }
+
       // Event Dashboard Component
       function EventDashboard({ eventId, onBack }) {
         const [event, setEvent] = useState(null);
@@ -805,6 +873,7 @@
         const [showCreateTable, setShowCreateTable] = useState(false);
         const [showAddGuest, setShowAddGuest] = useState(false);
         const [selectedGuest, setSelectedGuest] = useState(null);
+        const [showEditEvent, setShowEditEvent] = useState(false);
 
         useEffect(() => {
           fetchEventData();
@@ -863,8 +932,32 @@
                             : event.start_time || event.end_time}
                         </span>
                       )}
-                      {" "}• 📍 {event.venue || "Venue TBD"}
+                      {" "}• 📍 {event.venue || "Venue TBC"}
                     </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setShowEditEvent(true)}
+                      className="btn-secondary"
+                      style={{ whiteSpace: "nowrap" }}
+                    >
+                      ✏️ Edit Event
+                    </button>
+                    <button
+                      onClick={async () => {
+                        if (!window.confirm(`Delete "${event.name}"? This will remove all tables, guests, and data for this event.`)) return;
+                        try {
+                          await fetch(`${API_BASE}/events/${eventId}`, { method: "DELETE" });
+                          onBack();
+                        } catch (error) {
+                          console.error("Error deleting event:", error);
+                        }
+                      }}
+                      className="btn-secondary"
+                      style={{ whiteSpace: "nowrap", color: "#ef4444" }}
+                    >
+                      🗑 Delete Event
+                    </button>
                   </div>
                 </div>
               </div>
@@ -948,6 +1041,14 @@
                 />
               )}
             </div>
+
+            {showEditEvent && (
+              <EditEventModal
+                event={event}
+                onClose={() => setShowEditEvent(false)}
+                onSuccess={(updated) => { setEvent(updated); setShowEditEvent(false); }}
+              />
+            )}
           </div>
         );
       }
@@ -995,6 +1096,22 @@
         );
       }
 
+      // Helper: returns a Set of active sides ('top','bottom','left','right') for a rectangle table
+      // seat_sides_config (new): comma-separated string e.g. "top,bottom"
+      // seat_sides (legacy): integer count 1-4 (top / top+bottom / top+bottom+left / all)
+      function parseSeatSides(table) {
+        if (table.seat_sides_config) {
+          return new Set(table.seat_sides_config.split(',').filter(Boolean));
+        }
+        const count = parseInt(table.seat_sides) || 2;
+        const s = new Set();
+        if (count >= 1) s.add('top');
+        if (count >= 2) s.add('bottom');
+        if (count >= 3) s.add('left');
+        if (count >= 4) s.add('right');
+        return s;
+      }
+
       // Available layout icons
       const LAYOUT_ICONS = [
         { type: "entrance", emoji: "🚪", label: "Entrance" },
@@ -1015,6 +1132,104 @@
         const [selectedTable, setSelectedTable] = useState(null);
         const [tableNameEdit, setTableNameEdit] = useState("");
         const [capacityEdit, setCapacityEdit] = useState(1);
+        const [shapeEdit, setShapeEdit] = useState("circle");
+        const [purposeEdit, setPurposeEdit] = useState("dining table");
+        const [colorEdit, setColorEdit] = useState("#ffffff");
+        const [seatSidesConfigEdit, setSeatSidesConfigEdit] = useState("top,bottom");
+        const [showSeatsEdit, setShowSeatsEdit] = useState(true);
+        const [rotationEdit, setRotationEdit] = useState(0);
+        const [clipboard, setClipboard] = useState(null);
+
+        const handleShapeChange = (val) => {
+          setShapeEdit(val);
+          if (selectedTable) setTables(prev => prev.map(t => t.id === selectedTable.id ? { ...t, shape: val } : t));
+        };
+        const handlePurposeChange = (val) => {
+          setPurposeEdit(val);
+          if (selectedTable) {
+            const updates = { purpose: val };
+            if (val !== "dining table") {
+              updates.capacity = 0;
+              setCapacityEdit(0);
+            }
+            setTables(prev => prev.map(t => t.id === selectedTable.id ? { ...t, ...updates } : t));
+          }
+        };
+        const handleColorChange = (val) => {
+          setColorEdit(val);
+          if (selectedTable) setTables(prev => prev.map(t => t.id === selectedTable.id ? { ...t, color: val } : t));
+        };
+        const handleSeatSidesConfigChange = (val) => {
+          setSeatSidesConfigEdit(val);
+          if (selectedTable) setTables(prev => prev.map(t => t.id === selectedTable.id ? { ...t, seat_sides_config: val } : t));
+        };
+        const handleShowSeatsChange = (val) => {
+          setShowSeatsEdit(val);
+          if (selectedTable) setTables(prev => prev.map(t => t.id === selectedTable.id ? { ...t, show_seats: val } : t));
+        };
+        const handleRotationChange = (val) => {
+          setRotationEdit(val);
+          if (selectedTable) setTables(prev => prev.map(t => t.id === selectedTable.id ? { ...t, rotation: val } : t));
+        };
+        // Called by TableDetailPanel after Done saves to DB — only patches defined fields
+        // (preserves computed fields like seats_occupied that aren't returned by PUT)
+        const handleTableUpdate = (updatedTable) => {
+          const patch = Object.fromEntries(
+            Object.entries(updatedTable).filter(([, v]) => v !== undefined)
+          );
+          setTables(prev => prev.map(t => t.id !== updatedTable.id ? t : { ...t, ...patch }));
+        };
+
+        // Copy/paste helpers
+        const handleCopy = () => {
+          if (!selectedTable) return;
+          const t = tables.find(tbl => tbl.id === selectedTable.id);
+          if (t) setClipboard({ type: "table", data: { ...t } });
+        };
+
+        const getNextTableName = (templateName) => {
+          const match = templateName.match(/^(.*?)(\d+)$/);
+          if (!match) {
+            const baseName = templateName;
+            let counter = 2;
+            while (tables.some(t => t.table_name === `${baseName} ${counter}`)) counter++;
+            return `${baseName} ${counter}`;
+          }
+          const prefix = match[1];
+          const nums = tables
+            .map(t => { const m = t.table_name.match(/^(.*?)(\d+)$/); return (m && m[1] === prefix) ? parseInt(m[2]) : 0; })
+            .filter(n => n > 0);
+          const maxNum = nums.length > 0 ? Math.max(...nums) : 0;
+          return `${prefix}${maxNum + 1}`;
+        };
+
+        const handlePaste = async () => {
+          if (!clipboard || clipboard.type !== "table") return;
+          const t = clipboard.data;
+          const newName = getNextTableName(t.table_name);
+          try {
+            const createResp = await fetch(`${API_BASE}/events/${eventId}/tables`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ tables: [{ table_name: newName, capacity: t.capacity, shape: t.shape || "circle", purpose: t.purpose || "dining table", color: t.color || "#ffffff", seat_sides: t.seat_sides ?? 2, seat_sides_config: t.seat_sides_config || null, show_seats: t.show_seats ?? true }] }),
+            });
+            const createData = await createResp.json();
+            const newTable = createData.tables?.[0];
+            if (newTable) {
+              const newX = Math.min((t.position_x || 0) + 30, layoutWidth - 100);
+              const newY = Math.min((t.position_y || 0) + 30, layoutHeight - 80);
+              await fetch(`${API_BASE}/tables/${newTable.id}/position`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ position_x: newX, position_y: newY }),
+              });
+              // Append to existing state — do NOT overwrite (would lose other tables' local shapes)
+              setTables(prev => [...prev, { ...newTable, position_x: newX, position_y: newY, seats_occupied: 0 }]);
+            }
+          } catch (err) {
+            console.error("Error pasting:", err);
+          }
+        };
         const [saving, setSaving] = useState(false);
         const [layoutWidth, setLayoutWidth] = useState(() => parseInt(localStorage.getItem(`layout_w_${eventId}`)) || 1200);
         const [layoutHeight, setLayoutHeight] = useState(() => parseInt(localStorage.getItem(`layout_h_${eventId}`)) || 600);
@@ -1038,6 +1253,10 @@
         const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
         const [tableDragMoved, setTableDragMoved] = useState(false);
 
+        // Table resize
+        const [resizingTable, setResizingTable] = useState(null); // { id, shape, startW, startH }
+        const [resizeStartPos, setResizeStartPos] = useState(null); // { x, y }
+
         // Icon drag
         const [draggedIcon, setDraggedIcon] = useState(null);
         const [iconDragOffset, setIconDragOffset] = useState({ x: 0, y: 0 });
@@ -1045,13 +1264,19 @@
 
         const handleCreateTables = async (tableData) => {
           try {
-            await fetch(`${API_BASE}/events/${eventId}/tables`, {
+            const resp = await fetch(`${API_BASE}/events/${eventId}/tables`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ tables: tableData }),
             });
+            const data = await resp.json();
             setShowCreateModal(false);
-            onRefresh();
+            // Add new tables to existing state without overwriting (avoids losing local shape changes)
+            if (data.tables && data.tables.length > 0) {
+              setTables(prev => [...prev, ...data.tables.map(t => ({ ...t, seats_occupied: 0 }))]);
+            } else {
+              onRefresh();
+            }
           } catch (error) {
             console.error("Error creating tables:", error);
           }
@@ -1060,25 +1285,31 @@
         const handleSaveChanges = async () => {
           setSaving(true);
           try {
-            // Save selected table's name/capacity if one is open
-            if (selectedTable) {
-              await fetch(`${API_BASE}/tables/${selectedTable.id}`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ table_name: tableNameEdit, capacity: parseInt(capacityEdit) }),
-              });
-            }
-            // Save all table positions (whole layout)
+            // Save ALL tables from current local state — never use stale edit-state vars
+            // (edit-state vars default to "circle" and would overwrite correct shapes)
             await Promise.all(
-              tables.map((t) =>
+              tables.map((t) => Promise.all([
+                fetch(`${API_BASE}/tables/${t.id}`, {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    table_name: t.table_name, capacity: t.capacity,
+                    shape: t.shape || "circle", purpose: t.purpose || "dining table",
+                    color: t.color || "#ffffff",
+                    seat_sides: t.seat_sides ?? 2, seat_sides_config: t.seat_sides_config || null,
+                    show_seats: t.show_seats ?? true,
+                    width: t.width || null, height: t.height || null, rotation: t.rotation ?? 0,
+                  }),
+                }),
                 fetch(`${API_BASE}/tables/${t.id}/position`, {
                   method: "PUT",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ position_x: t.position_x, position_y: t.position_y }),
-                })
-              )
+                }),
+              ]))
             );
-            onRefresh();
+            // Do NOT call onRefresh() — local state already reflects the truth;
+            // calling it would overwrite local shapes with potentially stale DB values
           } catch (error) {
             alert("Error saving layout");
           }
@@ -1089,6 +1320,17 @@
           setTables((prev) =>
             prev.map((t) => t.id === tableId ? { ...t, position_x: x, position_y: y } : t)
           );
+        };
+
+        const handleClearLayout = async () => {
+          if (!window.confirm("Clear layout? This removes all objects (tables, stages, pillars, carpets, icons, etc.). Guests will be unassigned but not deleted.")) return;
+          try {
+            await fetch(`${API_BASE}/events/${eventId}/layout`, { method: "DELETE" });
+            setSelectedTable(null);
+            onRefresh();
+          } catch (error) {
+            alert("Error clearing layout");
+          }
         };
 
         const handleDeleteTable = async (tableId, tableName) => {
@@ -1115,10 +1357,28 @@
           if (!canvasRef.current) return;
           const canvas = canvasRef.current.getBoundingClientRect();
 
+          if (resizingTable) {
+            const dx = e.clientX - resizeStartPos.x;
+            const dy = e.clientY - resizeStartPos.y;
+            let newW, newH;
+            if (resizingTable.shape === "circle") {
+              const size = Math.max(40, resizingTable.startW + (dx + dy) / 2);
+              newW = size; newH = size;
+            } else {
+              newW = Math.max(60, resizingTable.startW + dx);
+              newH = Math.max(40, resizingTable.startH + dy);
+            }
+            setTables(prev => prev.map(t => t.id === resizingTable.id ? { ...t, width: Math.round(newW), height: Math.round(newH) } : t));
+            return;
+          }
+
           if (draggedTable) {
             setTableDragMoved(true);
-            const x = Math.max(0, Math.min(canvas.width - 100, e.clientX - canvas.left - dragOffset.x));
-            const y = Math.max(0, Math.min(canvas.height - 100, e.clientY - canvas.top - dragOffset.y));
+            const t = tables.find(tbl => tbl.id === draggedTable.id);
+            const tW = t?.width || (draggedTable.shape === "rectangle" ? 140 : 100);
+            const tH = t?.height || (draggedTable.shape === "rectangle" ? 80 : 100);
+            const x = Math.max(0, Math.min(canvas.width - tW, e.clientX - canvas.left - dragOffset.x));
+            const y = Math.max(0, Math.min(canvas.height - tH, e.clientY - canvas.top - dragOffset.y));
             setTables((prev) => prev.map((t) => t.id === draggedTable.id ? { ...t, position_x: x, position_y: y } : t));
           }
 
@@ -1131,12 +1391,35 @@
         };
 
         const handleMouseUp = async () => {
+          // Resize end
+          if (resizingTable) {
+            const t = tables.find(tbl => tbl.id === resizingTable.id);
+            if (t) {
+              try {
+                await fetch(`${API_BASE}/tables/${t.id}`, {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ table_name: t.table_name, capacity: t.capacity, shape: t.shape || "circle", purpose: t.purpose || "dining table", color: t.color || "#ffffff", seat_sides: t.seat_sides ?? 2, seat_sides_config: t.seat_sides_config || null, show_seats: t.show_seats ?? true, width: t.width, height: t.height, rotation: t.rotation ?? 0 }),
+                });
+              } catch (error) { console.error("Error saving resize:", error); }
+            }
+            setResizingTable(null);
+            setResizeStartPos(null);
+            return;
+          }
+
           if (draggedTable) {
             if (!tableDragMoved) {
               // It was a click, not a drag → open detail panel
               setSelectedTable(draggedTable);
               setTableNameEdit(draggedTable.table_name);
               setCapacityEdit(draggedTable.capacity);
+              setShapeEdit(draggedTable.shape || "circle");
+              setPurposeEdit(draggedTable.purpose || "dining table");
+              setColorEdit(draggedTable.color || "#ffffff");
+              setSeatSidesConfigEdit([...parseSeatSides(draggedTable)].join(',') || 'top');
+              setShowSeatsEdit(draggedTable.show_seats ?? true);
+              setRotationEdit(draggedTable.rotation ?? 0);
             } else {
               try {
                 await fetch(`${API_BASE}/tables/${draggedTable.id}/position`, {
@@ -1172,21 +1455,6 @@
           const rect = e.currentTarget.getBoundingClientRect();
           setIconDragOffset({ x: e.clientX - rect.left, y: e.clientY - rect.top });
           setDraggedIcon(icon);
-        };
-
-        // Icon handlers
-        const handleAddIcon = async (iconType) => {
-          try {
-            const res = await fetch(`${API_BASE}/events/${eventId}/icons`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ icon_type: iconType, position_x: 60, position_y: 60 }),
-            });
-            const data = await res.json();
-            setIcons((prev) => [...prev, data.icon || data]);
-          } catch (error) {
-            console.error("Error adding icon:", error);
-          }
         };
 
         const handleDeleteIcon = async (iconId) => {
@@ -1240,18 +1508,32 @@
                 <button onClick={() => setShowCreateModal(true)} className="btn-primary">
                   + Create Tables
                 </button>
-              </div>
-            </div>
-
-            {/* Icon palette */}
-            <div className="icon-palette">
-              <span className="icon-palette-label">Add to layout:</span>
-              {LAYOUT_ICONS.map((ic) => (
-                <button key={ic.type} className="icon-palette-btn" onClick={() => handleAddIcon(ic.type)} title={`Add ${ic.label}`}>
-                  <span>{ic.emoji}</span>
-                  <span>{ic.label}</span>
+                <button
+                  onClick={handleCopy}
+                  className="btn-secondary"
+                  disabled={!selectedTable}
+                  style={{ opacity: selectedTable ? 1 : 0.4 }}
+                  title={selectedTable ? `Copy ${selectedTable.table_name}` : "Select a table first"}
+                >
+                  📋 Copy
                 </button>
-              ))}
+                <button
+                  onClick={handlePaste}
+                  className="btn-secondary"
+                  disabled={!clipboard}
+                  style={{ opacity: clipboard ? 1 : 0.4 }}
+                  title={clipboard ? `Paste ${clipboard.data.table_name}` : "Nothing copied yet"}
+                >
+                  📌 Paste
+                </button>
+                <button
+                  onClick={handleClearLayout}
+                  className="btn-secondary"
+                  style={{ color: "#ef4444" }}
+                >
+                  🗑 Clear Layout
+                </button>
+              </div>
             </div>
 
             <div style={{ position: "relative" }}>
@@ -1298,37 +1580,98 @@
                   {/* Tables */}
                   {tables.map((table) => {
                     const n = table.capacity;
-                    const R = 65; // radius of seat ring from table center
-                    const S = 18; // seat circle diameter
+                    const S = 18;
+                    const tableShape = table.shape || "circle";
+                    const tablePurpose = table.purpose || "dining table";
+                    const tableColor = table.color || "#ffffff";
+                    const isDining = tablePurpose === "dining table";
+                    const isRect = tableShape === "rectangle";
+                    const doShowSeats = (table.show_seats ?? true) && n > 0;
+                    const defaultW = isRect ? 140 : 100;
+                    const defaultH = isRect ? 80 : 100;
+                    const W = table.width || defaultW;
+                    const H = table.height || defaultH;
+                    const rot = table.rotation || 0;
+                    const shapeStyle = isRect
+                      ? { borderRadius: "8px", width: `${W}px`, height: `${H}px`, transform: rot ? `rotate(${rot}deg)` : undefined }
+                      : { borderRadius: "50%", width: `${W}px`, height: `${H}px`, transform: rot ? `rotate(${rot}deg)` : undefined };
+
+                    // Build seat positions using actual W/H
+                    let seatPositions = [];
+                    if (doShowSeats) {
+                      if (!isRect) {
+                        const R = W / 2 + 10; // seats just outside the circle
+                        const cx0 = W / 2; const cy0 = H / 2;
+                        seatPositions = Array.from({ length: n }, (_, i) => {
+                          const angle = -Math.PI / 2 + (2 * Math.PI * i) / n;
+                          return { cx: cx0 + R * Math.cos(angle) - S / 2, cy: cy0 + R * Math.sin(angle) - S / 2 };
+                        });
+                      } else {
+                        const activeSides = parseSeatSides(table);
+                        const SIDES_ORDER = ['top', 'bottom', 'left', 'right'];
+                        const sidePosFns = {
+                          top:    (i, total) => ({ cx: W * (i + 1) / (total + 1) - S / 2, cy: -(S + 4) }),
+                          bottom: (i, total) => ({ cx: W * (i + 1) / (total + 1) - S / 2, cy: H + 4 }),
+                          left:   (i, total) => ({ cx: -(S + 4), cy: H * (i + 1) / (total + 1) - S / 2 }),
+                          right:  (i, total) => ({ cx: W + 4, cy: H * (i + 1) / (total + 1) - S / 2 }),
+                        };
+                        const activeList = SIDES_ORDER.filter(s => activeSides.has(s));
+                        const numActive = activeList.length;
+                        if (numActive > 0) {
+                          const base = Math.floor(n / numActive);
+                          const extra = n % numActive;
+                          activeList.forEach((side, idx) => {
+                            const count = base + (idx < extra ? 1 : 0);
+                            for (let i = 0; i < count; i++) seatPositions.push(sidePosFns[side](i, count));
+                          });
+                        }
+                      }
+                    }
+
+                    let occupiedSeats = null;
+                    try {
+                      const cached = localStorage.getItem(`seat_assignments_${table.id}`);
+                      if (cached) {
+                        const parsed = JSON.parse(cached);
+                        if (Array.isArray(parsed) && parsed.length > 0)
+                          occupiedSeats = new Set(parsed.map((sa) => sa.seat_number));
+                      }
+                    } catch {}
+
                     return (
                       <div
                         key={table.id}
-                        className={`draggable-table glass${selectedTable && selectedTable.id === table.id ? " selected" : ""}`}
-                        style={{ left: `${table.position_x}px`, top: `${table.position_y}px`, overflow: "visible" }}
+                        className={`draggable-table${selectedTable && selectedTable.id === table.id ? " selected" : ""}`}
+                        style={{ left: `${table.position_x}px`, top: `${table.position_y}px`, overflow: "visible", background: tableColor, ...shapeStyle }}
                         onMouseDown={(e) => handleTableMouseDown(e, table)}
                       >
-                        {/* Seats around the circle */}
-                        {Array.from({ length: n }, (_, i) => {
-                          const angle = -Math.PI / 2 + (2 * Math.PI * i) / n;
-                          const cx = 50 + R * Math.cos(angle);
-                          const cy = 50 + R * Math.sin(angle);
-                          const occupied = i < table.seats_occupied;
+                        {seatPositions.map((pos, i) => {
+                          const seatNum = i + 1;
+                          const occupied = occupiedSeats ? occupiedSeats.has(seatNum) : seatNum <= table.seats_occupied;
                           return (
-                            <div
-                              key={i}
-                              className={`seat-around ${occupied ? "occupied" : "empty"}`}
-                              style={{ left: cx - S / 2, top: cy - S / 2 }}
-                              title={`Seat ${i + 1}`}
-                            >
-                              {i + 1}
+                            <div key={i} className={`seat-around ${occupied ? "occupied" : "empty"}`}
+                              style={{ left: pos.cx, top: pos.cy }} title={`Seat ${seatNum}`}>
+                              {seatNum}
                             </div>
                           );
                         })}
-
                         <div className="font-bold text-primary" style={{ fontSize: "13px" }}>{table.table_name}</div>
-                        <div className="text-secondary" style={{ fontSize: "10px" }}>
-                          {table.seats_occupied}/{table.capacity}
-                        </div>
+                        {isDining && n > 0 && (
+                          <div className="text-secondary" style={{ fontSize: "10px" }}>{table.seats_occupied}/{n}</div>
+                        )}
+                        {!isDining && (
+                          <div style={{ fontSize: "10px", color: "#888", textTransform: "capitalize" }}>{tablePurpose}</div>
+                        )}
+                        {/* Resize handle */}
+                        <div
+                          onMouseDown={(e) => {
+                            e.stopPropagation();
+                            setResizingTable({ id: table.id, shape: tableShape, startW: W, startH: H });
+                            setResizeStartPos({ x: e.clientX, y: e.clientY });
+                          }}
+                          style={{ position: "absolute", right: -6, bottom: -6, width: 13, height: 13, background: "#d4af37", border: "2px solid white", borderRadius: "50%", cursor: "se-resize", zIndex: 20 }}
+                          title="Resize"
+                        />
                       </div>
                     );
                   })}
@@ -1336,12 +1679,26 @@
                   {/* Table detail panel */}
                   {selectedTable && (
                     <TableDetailPanel
+                      key={selectedTable.id}
                       table={tables.find((t) => t.id === selectedTable.id) || selectedTable}
                       guests={guests}
                       tableName={tableNameEdit}
                       setTableName={setTableNameEdit}
                       capacity={capacityEdit}
                       setCapacity={setCapacityEdit}
+                      shape={shapeEdit}
+                      setShape={handleShapeChange}
+                      purpose={purposeEdit}
+                      setPurpose={handlePurposeChange}
+                      color={colorEdit}
+                      setColor={handleColorChange}
+                      seatSidesConfig={seatSidesConfigEdit}
+                      setSeatSidesConfig={handleSeatSidesConfigChange}
+                      showSeats={showSeatsEdit}
+                      setShowSeats={handleShowSeatsChange}
+                      rotation={rotationEdit}
+                      setRotation={handleRotationChange}
+                      onTableUpdate={handleTableUpdate}
                       onClose={() => setSelectedTable(null)}
                       onRefresh={onRefresh}
                       onDelete={handleDeleteTable}
@@ -1363,53 +1720,224 @@
       }
 
       // Table Detail Panel
-      function TableDetailPanel({ table, guests, tableName, setTableName, capacity, setCapacity, onClose, onRefresh, onDelete, onPositionChange }) {
+      function TableDetailPanel({ table, guests, tableName, setTableName, capacity, setCapacity, shape, setShape, purpose, setPurpose, color, setColor, seatSidesConfig, setSeatSidesConfig, showSeats, setShowSeats, rotation, setRotation, onTableUpdate, onClose, onRefresh, onDelete, onPositionChange }) {
 
-        const [seatAssignments, setSeatAssignments] = React.useState([]);
+        const SEAT_CACHE_KEY = `seat_assignments_${table.id}`;
 
+        const [seatAssignments, setSeatAssignments] = React.useState(() => {
+          try { return JSON.parse(localStorage.getItem(SEAT_CACHE_KEY)) || []; } catch { return []; }
+        });
+
+        // Tracks tableOnly members the admin has dismissed without a specific seat assignment
+        const [hiddenTableOnlyKeys, setHiddenTableOnlyKeys] = React.useState(new Set());
+
+        // Auto-assign prompt: shown after first seat pick for a multi-member party
+        const [autoAssignPrompt, setAutoAssignPrompt] = React.useState(null); // { guestId, guestName, partySize, alreadyAssigned }
+
+        // Dismiss prompt automatically when the prompt's guest becomes fully seated
         React.useEffect(() => {
-          fetchSeatAssignments();
-        }, [table.id]);
-
-        const fetchSeatAssignments = async () => {
-          try {
-            const res = await fetch(`${API_BASE}/tables/${table.id}/seats`);
-            const data = await res.json();
-            setSeatAssignments(Array.isArray(data) ? data : []);
-          } catch (err) {
-            console.error("Error fetching seat assignments:", err);
+          if (!autoAssignPrompt) return;
+          const assignedForGuest = seatAssignments.filter(sa => sa.guest_id === autoAssignPrompt.guestId).length;
+          const guest = guests.find(g => g.id === autoAssignPrompt.guestId);
+          if (guest && assignedForGuest >= guest.party_size) {
+            setAutoAssignPrompt(null);
           }
+        }, [seatAssignments]);
+
+        const saveSeatAssignments = (data) => {
+          setSeatAssignments(data);
+          localStorage.setItem(SEAT_CACHE_KEY, JSON.stringify(data));
         };
 
-        // Guests not yet assigned to any seat at this table
-        const assignedGuestIds = new Set(seatAssignments.map((sa) => sa.guest_id));
-        const unassigned = guests.filter((g) => !g.table_id);
+        // Fresh cross-table seated-member map: guestId -> Set<memberNumber>
+        const [seatedMembersMap, setSeatedMembersMap] = React.useState({});
+        // Blocks the seat dropdown until fresh data is loaded (prevents stale-data assignments)
+        const [isDataLoaded, setIsDataLoaded] = React.useState(false);
 
-        // Build dropdown options: unassigned guests + guests at this table but not in a specific seat
-        const dropdownOptions = [];
-        for (const g of unassigned) {
-          if (g.party_size > 1) {
-            for (let m = 1; m <= g.party_size; m++) {
-              dropdownOptions.push({ value: String(g.id), label: `${g.name} ${m}/${g.party_size}` });
+        React.useEffect(() => {
+          setIsDataLoaded(false);
+          const load = async () => {
+            try {
+              const [seatsRes, guestsRes] = await Promise.all([
+                fetch(`${API_BASE}/tables/${table.id}/seats`),
+                fetch(`${API_BASE}/events/${table.event_id}/guests`),
+              ]);
+              if (seatsRes.ok) {
+                const d = await seatsRes.json();
+                if (Array.isArray(d)) saveSeatAssignments(d);
+              }
+              if (guestsRes.ok) {
+                const gd = await guestsRes.json();
+                const map = {};
+                for (const g of gd) map[g.id] = new Set((g.seated_members || []).map(Number));
+                setSeatedMembersMap(map);
+              }
+            } catch (_) {}
+            setIsDataLoaded(true);
+          };
+          load();
+        }, [table.id]);
+
+        const displayCapacity = parseInt(capacity) || table.capacity;
+
+        // Count how many seat assignments each guest already has (by member_number)
+        const assignedMembersByGuest = {};
+        for (const sa of seatAssignments) {
+          if (!assignedMembersByGuest[sa.guest_id]) assignedMembersByGuest[sa.guest_id] = new Set();
+          assignedMembersByGuest[sa.guest_id].add(sa.member_number);
+        }
+        // Keep seatedMembersMap in sync with the guests prop (guests is refreshed via onRefresh
+        // after every seat assignment, so this catches cross-table updates without re-fetching).
+        React.useEffect(() => {
+          if (!guests.length) return;
+          setSeatedMembersMap(prev => {
+            const next = { ...prev };
+            for (const g of guests) {
+              const fromProp = new Set((g.seated_members || []).map(Number));
+              // Union with existing map so we never lose data from the fresh fetch
+              next[g.id] = new Set([...(prev[g.id] || []), ...fromProp]);
             }
-          } else {
-            dropdownOptions.push({ value: String(g.id), label: g.name });
+            return next;
+          });
+        }, [guests]);
+
+        // Helper: get globally-seated member numbers for a guest.
+        // Unions seatedMembersMap (fetched at mount) + prop's seated_members (kept fresh via onRefresh)
+        // + current table's local assignments. Using both sources ensures that assignments made at
+        // other tables after this panel mounted are still reflected in the dropdown.
+        const getSeated = (gId) => {
+          const propGuest = guests.find(g => g.id === gId);
+          const fromMap = new Set([...(seatedMembersMap[gId] ?? [])].map(Number));
+          const fromProp = new Set((propGuest?.seated_members || []).map(Number));
+          return new Set([...fromMap, ...fromProp, ...(assignedMembersByGuest[gId] || [])]);
+        };
+
+        // A guest is "fully assigned" when EITHER:
+        //  - unique seated member numbers >= party_size, OR
+        //  - raw DB seat-assignment count >= party_size (handles duplicate member_numbers in DB)
+        const isFullySeated = (g) => {
+          const rawCount = Math.max(
+            (g.seated_members || []).length,            // total DB rows (may have dupes)
+            seatedMembersMap[g.id]?.size || 0           // unique from fresh fetch
+          );
+          const uniqueCount = getSeated(g.id).size;
+          return Math.max(rawCount, uniqueCount) >= g.party_size;
+        };
+
+        const fullyAssignedGuestIds = new Set(guests.filter(isFullySeated).map(g => g.id));
+
+        // Guests assigned to this table via table_id but with NO specific seat assignments yet.
+        // Once any member of a party gets a seat, they leave this list entirely
+        // (remaining unassigned members are handled via the GUESTS section + auto-assign prompt).
+        const tableOnlyGuests = guests.filter(
+          (g) => g.table_id === table.id && !fullyAssignedGuestIds.has(g.id) && !(assignedMembersByGuest[g.id]?.size > 0)
+        );
+        const expandedTableOnly = [];
+        for (const g of tableOnlyGuests) {
+          const globalSeatedNums = getSeated(g.id);
+          for (let m = 1; m <= g.party_size; m++) {
+            if (!globalSeatedNums.has(m) && !hiddenTableOnlyKeys.has(`${g.id}_${m}`))
+              expandedTableOnly.push({ ...g, member: m });
+          }
+        }
+        // Fill empty seat slots with table-only members (preserves old behaviour)
+        const emptySeats = Array.from({ length: displayCapacity }, (_, i) => i + 1)
+          .filter((sn) => !seatAssignments.find((sa) => sa.seat_number === sn));
+        const seatToTableOnly = {};
+        expandedTableOnly.forEach((member, idx) => {
+          if (idx < emptySeats.length) seatToTableOnly[emptySeats[idx]] = member;
+        });
+
+        // Dropdown: guests with at least one unseated member; already-seated members shown as disabled.
+        // Each party member is evaluated individually:
+        //   - seated at another table  → "(seated on Table X)"  disabled
+        //   - seated at this table     → "(seated)"             disabled
+        //   - not seated yet           → no extra tag           enabled
+        const dropdownPool = guests.filter(g => !isFullySeated(g));
+        const dropdownOptions = [];
+        for (const g of dropdownPool) {
+          const globalSeatedNums = getSeated(g.id);
+          const memberCount = g.party_size > 1 ? g.party_size : 1;
+          for (let m = 1; m <= memberCount; m++) {
+            const seatedHere = !!assignedMembersByGuest[g.id]?.has(m);
+            const seatedElsewhere = globalSeatedNums.has(m) && !seatedHere;
+            const alreadySeated = seatedHere || seatedElsewhere;
+            const memberLabel = g.party_size > 1
+              ? `${g.name} ${m}/${g.party_size}`
+              : g.name;
+            let label;
+            if (seatedElsewhere) {
+              label = `${memberLabel} (seated on ${g.table_name || "another table"})`;
+            } else if (seatedHere) {
+              label = `${memberLabel} (seated)`;
+            } else {
+              // Not seated anywhere — show table-assignment context if relevant
+              const isOtherTable = g.table_id && g.table_id !== table.id;
+              const tag = isOtherTable
+                ? ` (split from ${g.table_name || "another table"})`
+                : (g.table_id === table.id ? " (no seat #)" : "");
+              label = `${memberLabel}${tag}`;
+            }
+            dropdownOptions.push({ value: `${g.id}_${m}`, label, disabled: alreadySeated });
           }
         }
 
-        const handleAssignSeat = async (seatNumber, guestId) => {
+        const handleAssignSeat = async (seatNumber, encodedValue) => {
+          const [guestId, memberNumber] = encodedValue.split("_").map(Number);
+          const guest = guests.find((g) => g.id === guestId);
+
+          // Client-side cross-table conflict check (before any API call)
+          const alreadyAtThisTable = assignedMembersByGuest[guestId]?.has(memberNumber);
+          const alreadyElsewhere = !alreadyAtThisTable && (
+            seatedMembersMap[guestId]?.has(memberNumber) ||
+            (guest?.seated_members || []).includes(memberNumber)
+          );
+          if (alreadyElsewhere) {
+            const guestLabel = guest
+              ? (guest.party_size > 1 ? `${guest.name} ${memberNumber}/${guest.party_size}` : guest.name)
+              : "This guest";
+            const currentTableName = guest?.table_name || "another table";
+            const confirmed = window.confirm(
+              `${guestLabel} is already assigned to a seat at "${currentTableName}".\n\nMove them to this table instead?`
+            );
+            if (!confirmed) return;
+            // Admin confirmed — try to remove old seat (best effort)
+            if (guest?.table_id && guest.table_id !== table.id) {
+              try {
+                const oldSeatsRes = await fetch(`${API_BASE}/tables/${guest.table_id}/seats`);
+                if (oldSeatsRes.ok) {
+                  const oldSeats = await oldSeatsRes.json();
+                  const oldSeat = oldSeats.find(s => s.guest_id === guestId && s.member_number === memberNumber);
+                  if (oldSeat) {
+                    await fetch(`${API_BASE}/tables/${guest.table_id}/seats/${oldSeat.seat_number}`, { method: "DELETE" });
+                  }
+                }
+              } catch (_) {}
+            }
+          }
+
+          // Optimistic update
+          if (guest) {
+            saveSeatAssignments([
+              ...seatAssignments.filter((sa) => sa.seat_number !== seatNumber),
+              { seat_number: seatNumber, guest_id: guestId, member_number: memberNumber, guest_name: guest.name, party_size: guest.party_size },
+            ]);
+          }
           try {
             await fetch(`${API_BASE}/tables/${table.id}/seats`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ seat_number: seatNumber, guest_id: guestId }),
+              body: JSON.stringify({ seat_number: seatNumber, guest_id: guestId, member_number: memberNumber }),
             });
-            await fetch(`${API_BASE}/guests/${guestId}/assign`, {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ table_id: table.id }),
-            });
-            await fetchSeatAssignments();
+            if (!guest?.table_id || guest.table_id === table.id) {
+              await fetch(`${API_BASE}/guests/${guestId}/assign`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ table_id: table.id }),
+              });
+            }
+            const r = await fetch(`${API_BASE}/tables/${table.id}/seats`);
+            if (r.ok) { const d = await r.json(); if (Array.isArray(d)) saveSeatAssignments(d); }
             onRefresh();
           } catch (err) {
             console.error("Error assigning seat:", err);
@@ -1417,39 +1945,88 @@
         };
 
         const handleRemoveSeat = async (seatNumber, guestId) => {
+          const updatedAssignments = seatAssignments.filter((sa) => sa.seat_number !== seatNumber);
+          saveSeatAssignments(updatedAssignments);
           try {
             await fetch(`${API_BASE}/tables/${table.id}/seats/${seatNumber}`, { method: "DELETE" });
-            await fetch(`${API_BASE}/guests/${guestId}/assign`, {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ table_id: null }),
-            });
-            await fetchSeatAssignments();
+            // Only unassign from table entirely if no other seat assignments remain for this guest
+            const remainingForGuest = updatedAssignments.filter((sa) => sa.guest_id === guestId);
+            if (remainingForGuest.length === 0) {
+              await fetch(`${API_BASE}/guests/${guestId}/assign`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ table_id: null }),
+              });
+            }
+            const r = await fetch(`${API_BASE}/tables/${table.id}/seats`);
+            if (r.ok) { const d = await r.json(); if (Array.isArray(d)) saveSeatAssignments(d); }
             onRefresh();
           } catch (err) {
-            console.error("Error removing seat assignment:", err);
+            console.error("Error removing seat:", err);
           }
         };
 
-        const displayCapacity = parseInt(capacity) || table.capacity;
+        const handleRemoveFromTable = async (guestId, memberNumber) => {
+          const key = `${guestId}_${memberNumber}`;
+          const newHidden = new Set([...hiddenTableOnlyKeys, key]);
+          setHiddenTableOnlyKeys(newHidden);
+
+          // Count how many of this guest's members are now accounted for
+          const guest = guests.find((g) => g.id === guestId);
+          const assignedCount = assignedMembersByGuest[guestId]?.size || 0;
+          const hiddenCount = [...newHidden].filter((k) => k.startsWith(`${guestId}_`)).length;
+
+          // Only unassign from table when ALL members are either seated or hidden
+          if (assignedCount + hiddenCount >= (guest?.party_size || 1)) {
+            try {
+              await fetch(`${API_BASE}/guests/${guestId}/assign`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ table_id: null }),
+              });
+              onRefresh();
+            } catch (err) {
+              console.error("Error removing guest from table:", err);
+            }
+          }
+        };
+
+        const totalFilled = seatAssignments.length + expandedTableOnly.length;
 
         const handleDone = async () => {
+          // Apply edits to local state immediately so they survive without a DB round-trip
+          onTableUpdate({
+            id: table.id,
+            table_name: tableName,
+            capacity: parseInt(capacity),
+            shape,
+            purpose,
+            color,
+            seat_sides: (seatSidesConfig || '').split(',').filter(Boolean).length,
+            seat_sides_config: seatSidesConfig,
+            show_seats: showSeats,
+            rotation: rotation ?? 0,
+            width: table.width,
+            height: table.height,
+            position_x: table.position_x,
+            position_y: table.position_y,
+          });
+          onClose();
+          // Persist to DB in the background (don't await — don't overwrite local state with refresh)
           try {
             await fetch(`${API_BASE}/tables/${table.id}`, {
               method: "PUT",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ table_name: tableName, capacity: parseInt(capacity) }),
+              body: JSON.stringify({ table_name: tableName, capacity: parseInt(capacity), shape, purpose, color, seat_sides: (seatSidesConfig || '').split(',').filter(Boolean).length, seat_sides_config: seatSidesConfig, show_seats: showSeats, rotation: rotation ?? 0, width: table.width, height: table.height }),
             });
             await fetch(`${API_BASE}/tables/${table.id}/position`, {
               method: "PUT",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ position_x: table.position_x, position_y: table.position_y }),
             });
-            onRefresh();
           } catch (error) {
             console.error("Error saving table:", error);
           }
-          onClose();
         };
 
         return (
@@ -1484,7 +2061,7 @@
                   <label style={{ fontSize: "11px", fontWeight: 600, color: "#888", display: "block", marginBottom: "3px" }}>SEATS</label>
                   <input
                     type="number"
-                    min="1"
+                    min="0"
                     max="50"
                     value={capacity}
                     onChange={(e) => setCapacity(e.target.value)}
@@ -1515,11 +2092,209 @@
                   />
                 </div>
               </div>
+              {/* W / H / Rotation — same row */}
+              <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ fontSize: "11px", fontWeight: 600, color: "#888", display: "block", marginBottom: "3px" }}>W</label>
+                  <input
+                    type="number"
+                    min="40"
+                    value={Math.round(table.width || (table.shape === "rectangle" ? 140 : 100))}
+                    onChange={(e) => onTableUpdate({ id: table.id, width: Math.max(40, parseInt(e.target.value) || 40) })}
+                    style={{ width: "100%", fontSize: "13px", padding: "5px 8px", borderRadius: "6px", border: "1px solid #d1d5db", boxSizing: "border-box" }}
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={{ fontSize: "11px", fontWeight: 600, color: "#888", display: "block", marginBottom: "3px" }}>H</label>
+                  <input
+                    type="number"
+                    min="40"
+                    value={Math.round(table.height || (table.shape === "rectangle" ? 80 : 100))}
+                    onChange={(e) => onTableUpdate({ id: table.id, height: Math.max(40, parseInt(e.target.value) || 40) })}
+                    style={{ width: "100%", fontSize: "13px", padding: "5px 8px", borderRadius: "6px", border: "1px solid #d1d5db", boxSizing: "border-box" }}
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={{ fontSize: "11px", fontWeight: 600, color: "#888", display: "block", marginBottom: "3px" }}>ROT°</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="359"
+                    value={rotation ?? 0}
+                    onChange={(e) => setRotation(parseInt(e.target.value) || 0)}
+                    style={{ width: "100%", fontSize: "13px", padding: "5px 8px", borderRadius: "6px", border: "1px solid #d1d5db", boxSizing: "border-box" }}
+                  />
+                </div>
+              </div>
             </div>
 
+            {/* Shape / Purpose / Color */}
+            <div style={{ padding: "10px 14px 8px", borderBottom: "1px solid rgba(212,175,55,0.2)" }}>
+              <div style={{ display: "flex", gap: "8px", marginBottom: "8px" }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ fontSize: "11px", fontWeight: 600, color: "#888", display: "block", marginBottom: "3px" }}>SHAPE</label>
+                  <select value={shape} onChange={(e) => setShape(e.target.value)}
+                    style={{ width: "100%", fontSize: "12px", padding: "5px 6px", borderRadius: "6px", border: "1px solid #d1d5db" }}>
+                    <option value="circle">Circle</option>
+                    <option value="rectangle">Rectangle</option>
+                  </select>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={{ fontSize: "11px", fontWeight: 600, color: "#888", display: "block", marginBottom: "3px" }}>BODY COLOR</label>
+                  <input type="color" value={color} onChange={(e) => setColor(e.target.value)}
+                    style={{ width: "100%", height: "32px", padding: "2px", borderRadius: "6px", border: "1px solid #d1d5db", cursor: "pointer" }} />
+                </div>
+              </div>
+              <div>
+                <label style={{ fontSize: "11px", fontWeight: 600, color: "#888", display: "block", marginBottom: "3px" }}>PURPOSE</label>
+                <select value={purpose} onChange={(e) => setPurpose(e.target.value)}
+                  style={{ width: "100%", fontSize: "12px", padding: "5px 6px", borderRadius: "6px", border: "1px solid #d1d5db" }}>
+                  <option value="dining table">Dining Table</option>
+                  <option value="stage">Stage</option>
+                  <option value="pillar">Pillar</option>
+                  <option value="carpet">Carpet</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+              {shape === "rectangle" && (
+                <div style={{ marginTop: "8px" }}>
+                  <label style={{ fontSize: "11px", fontWeight: 600, color: "#888", display: "block", marginBottom: "5px" }}>SEAT SIDES</label>
+                  {(() => {
+                    const activeSides = new Set((seatSidesConfig || '').split(',').filter(Boolean));
+                    const toggle = (side, checked) => {
+                      const s = new Set(activeSides);
+                      checked ? s.add(side) : s.delete(side);
+                      setSeatSidesConfig([...s].join(','));
+                    };
+                    const chk = (side, label) => (
+                      <label key={side} style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "12px", cursor: "pointer", userSelect: "none" }}>
+                        <input type="checkbox" checked={activeSides.has(side)} onChange={(e) => toggle(side, e.target.checked)} style={{ cursor: "pointer" }} />
+                        {label}
+                      </label>
+                    );
+                    return (
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "4px" }}>
+                        {chk('top', 'Top')}
+                        <div style={{ display: "flex", gap: "24px" }}>
+                          {chk('left', 'Left')}
+                          {chk('right', 'Right')}
+                        </div>
+                        {chk('bottom', 'Bottom')}
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+              <div style={{ marginTop: "8px", display: "flex", alignItems: "center", gap: "8px" }}>
+                <input type="checkbox" id="show-seats-toggle" checked={showSeats} onChange={(e) => setShowSeats(e.target.checked)}
+                  style={{ width: "14px", height: "14px", cursor: "pointer" }} />
+                <label htmlFor="show-seats-toggle" style={{ fontSize: "11px", fontWeight: 600, color: "#888", cursor: "pointer" }}>SHOW SEATS</label>
+              </div>
+            </div>
+
+            {/* Guest-centric seat assignment — one row per guest */}
+            {(() => {
+              const tableGuests = guests.filter(g => g.table_id === table.id);
+              const totalMembers = tableGuests.reduce((acc, g) => acc + g.party_size, 0);
+              return (
+                <>
+                  <div style={{ padding: "8px 14px 2px", borderTop: "1px solid rgba(212,175,55,0.2)", fontSize: "11px", fontWeight: 600, color: "#888" }}>
+                    GUESTS — {totalMembers} member{totalMembers !== 1 ? "s" : ""}
+                  </div>
+                  {tableGuests.length === 0 ? (
+                    <div style={{ padding: "4px 14px 10px", fontSize: "12px", color: "#aaa" }}>No guests assigned to this table</div>
+                  ) : (
+                    <div style={{ paddingBottom: "6px" }}>
+                      {tableGuests.map(g => {
+                        const guestAssignments = seatAssignments.filter(sa => sa.guest_id === g.id);
+                        // Count globally-seated members (cross-table) + local assignments for this table
+                        const globalSeatedNums = getSeated(g.id);
+                        const assignedCount = globalSeatedNums.size;
+                        const fullyAssigned = assignedCount >= g.party_size;
+                        const remaining = g.party_size - assignedCount;
+                        const isPromptActive = autoAssignPrompt?.guestId === g.id;
+                        // Indicator: gold ✓ = all seated, amber = partially seated (shows remaining count), grey = none seated
+                        const indicatorBg = fullyAssigned ? "#d4af37" : assignedCount > 0 ? "#f59e0b" : "#e5e7eb";
+                        const indicatorLabel = fullyAssigned ? "✓" : (g.party_size > 1 ? String(remaining) : "–");
+                        return (
+                          <React.Fragment key={`g_${g.id}`}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "6px", padding: "5px 14px", borderBottom: isPromptActive ? "none" : "1px solid #f3f4f6", fontSize: "12px" }}>
+                              {/* Assignment indicator */}
+                              <div style={{ width: "20px", height: "20px", borderRadius: "50%", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: indicatorBg, border: "2px solid white", boxShadow: "0 1px 3px rgba(0,0,0,0.15)" }}>
+                                <span style={{ fontSize: "7px", fontWeight: 700, color: assignedCount > 0 ? "white" : "#999", lineHeight: 1 }}>
+                                  {indicatorLabel}
+                                </span>
+                              </div>
+                              {/* Guest name + not-seated count (info only, no dropdown) */}
+                              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#333", fontWeight: assignedCount > 0 ? 600 : 400 }}>
+                                {g.name}
+                                {g.party_size > 1 && !fullyAssigned
+                                  ? <span style={{ marginLeft: "5px", fontSize: "10px", color: "#f59e0b", fontWeight: 500 }}>{remaining} not seated</span>
+                                  : g.party_size > 1
+                                    ? <span style={{ marginLeft: "5px", fontSize: "10px", color: "#d4af37", fontWeight: 500 }}>all seated</span>
+                                    : null}
+                              </span>
+                            </div>
+
+                            {/* Auto-assign prompt — shown inline below the guest row */}
+                            {isPromptActive && (
+                              <div style={{ margin: "0 14px 8px", padding: "8px 10px", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: "6px", fontSize: "11px", borderTop: "none" }}>
+                                <div style={{ marginBottom: "6px", color: "#92400e", lineHeight: 1.4 }}>
+                                  Auto-assign the remaining <strong>{g.party_size - autoAssignPrompt.alreadyAssigned}</strong> member{g.party_size - autoAssignPrompt.alreadyAssigned !== 1 ? "s" : ""} of <strong>{g.name}</strong> to next available seats?
+                                </div>
+                                <div style={{ display: "flex", gap: "6px" }}>
+                                  <button
+                                    onClick={async () => {
+                                      // Batch-assign all remaining members in one go
+                                      // Use global seated_members + local seatAssignments to avoid re-assigning cross-table members
+                                      const currentAssigned = new Set(seatAssignments.map(sa => sa.seat_number));
+                                      const alreadyMemberNums = getSeated(g.id);
+                                      const remaining = Array.from({ length: g.party_size }, (_, i) => i + 1).filter(n => !alreadyMemberNums.has(n));
+                                      const avail = Array.from({ length: displayCapacity }, (_, i) => i + 1).filter(sn => !currentAssigned.has(sn));
+                                      const newAssignments = remaining.slice(0, avail.length).map((memberNum, i) => ({
+                                        seat_number: avail[i], guest_id: g.id, member_number: memberNum,
+                                        guest_name: g.name, party_size: g.party_size,
+                                      }));
+                                      // Optimistic update: add all at once
+                                      saveSeatAssignments([...seatAssignments, ...newAssignments]);
+                                      // Persist in parallel
+                                      await Promise.all(newAssignments.map(na =>
+                                        fetch(`${API_BASE}/tables/${table.id}/seats`, {
+                                          method: "POST",
+                                          headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ seat_number: na.seat_number, guest_id: na.guest_id, member_number: na.member_number }),
+                                        })
+                                      ));
+                                      // Re-fetch once to sync
+                                      const r = await fetch(`${API_BASE}/tables/${table.id}/seats`);
+                                      if (r.ok) { const d = await r.json(); if (Array.isArray(d)) saveSeatAssignments(d); }
+                                      setAutoAssignPrompt(null);
+                                    }}
+                                    style={{ flex: 1, padding: "5px 8px", background: "#d4af37", color: "white", border: "none", borderRadius: "5px", fontSize: "11px", cursor: "pointer", fontWeight: 600 }}
+                                  >
+                                    Yes, auto-assign
+                                  </button>
+                                  <button
+                                    onClick={() => setAutoAssignPrompt(null)}
+                                    style={{ flex: 1, padding: "5px 8px", background: "white", color: "#666", border: "1px solid #d1d5db", borderRadius: "5px", fontSize: "11px", cursor: "pointer" }}
+                                  >
+                                    No, manual
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+
             {/* Seats section header */}
-            <div style={{ padding: "8px 14px 2px", fontSize: "11px", fontWeight: 600, color: "#888" }}>
-              SEATS — {seatAssignments.length}/{displayCapacity} filled
+            <div style={{ padding: "8px 14px 2px", borderTop: "1px solid rgba(212,175,55,0.2)", fontSize: "11px", fontWeight: 600, color: "#888" }}>
+              SEATS — {totalFilled}/{displayCapacity} filled
             </div>
 
             {/* Seat rows */}
@@ -1527,13 +2302,16 @@
               {Array.from({ length: displayCapacity }, (_, i) => {
                 const seatNum = i + 1;
                 const assignment = seatAssignments.find((sa) => sa.seat_number === seatNum) || null;
+                const tableOnlyMember = !assignment ? seatToTableOnly[seatNum] : null;
                 return (
                   <div key={i} className="seat-row">
                     <div className="seat-number">{seatNum}</div>
                     {assignment ? (
                       <>
                         <span style={{ flex: 1, fontSize: "12px", fontWeight: 600, color: "#2d2d2d", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {assignment.guest_name}
+                          {assignment.party_size > 1
+                            ? `${assignment.guest_name} ${assignment.member_number}/${assignment.party_size}`
+                            : assignment.guest_name}
                         </span>
                         <button
                           onClick={() => handleRemoveSeat(seatNum, assignment.guest_id)}
@@ -1541,15 +2319,41 @@
                           title="Remove from seat"
                         >✕</button>
                       </>
+                    ) : tableOnlyMember ? (
+                      <>
+                        <span style={{ flex: 1, fontSize: "12px", fontWeight: 600, color: "#2d2d2d", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {tableOnlyMember.party_size > 1 ? `${tableOnlyMember.name} ${tableOnlyMember.member}/${tableOnlyMember.party_size}` : tableOnlyMember.name}
+                        </span>
+                        <button
+                          onClick={() => handleRemoveFromTable(tableOnlyMember.id, tableOnlyMember.member)}
+                          style={{ fontSize: "11px", color: "#ef4444", background: "none", border: "none", cursor: "pointer", padding: "2px 4px", flexShrink: 0 }}
+                          title="Remove from table"
+                        >✕</button>
+                      </>
                     ) : (
                       <select
                         value=""
-                        onChange={(e) => { if (e.target.value) handleAssignSeat(seatNum, parseInt(e.target.value)); }}
+                        disabled={!isDataLoaded}
+                        onChange={async (e) => {
+                          const val = e.target.value;
+                          if (!val) return;
+                          const [guestId, memberNumber] = val.split("_").map(Number);
+                          const guest = guests.find(g => g.id === guestId);
+                          await handleAssignSeat(seatNum, val);
+                          // After assigning, offer auto-assign for remaining party members
+                          if (guest && guest.party_size > 1) {
+                            const alreadyAssigned = (assignedMembersByGuest[guestId]?.size || 0) + 1;
+                            const leftOver = guest.party_size - alreadyAssigned;
+                            if (leftOver > 0) {
+                              setAutoAssignPrompt({ guestId, guestName: guest.name, partySize: guest.party_size, alreadyAssigned });
+                            }
+                          }
+                        }}
                         style={{ flex: 1, fontSize: "11px", padding: "2px 4px", borderRadius: "5px", border: "1px solid #d1d5db", color: "#666" }}
                       >
-                        <option value="">— empty —</option>
-                        {dropdownOptions.map((opt, idx) => (
-                          <option key={`${opt.value}-${idx}`} value={opt.value}>{opt.label}</option>
+                        <option value="">{isDataLoaded ? "— empty —" : "Loading…"}</option>
+                        {isDataLoaded && dropdownOptions.map((opt, idx) => (
+                          <option key={`${opt.value}-${idx}`} value={opt.value} disabled={opt.disabled}>{opt.label}</option>
                         ))}
                       </select>
                     )}
@@ -1564,7 +2368,7 @@
                 onClick={() => { onDelete(table.id, table.table_name); onClose(); }}
                 style={{ width: "100%", padding: "8px", background: "white", color: "#ef4444", border: "1px solid #ef4444", borderRadius: "8px", fontWeight: 600, cursor: "pointer", fontSize: "13px" }}
               >
-                🗑 Delete Table
+                🗑 Delete
               </button>
             </div>
           </div>
@@ -1576,12 +2380,23 @@
         const [numTables, setNumTables] = useState(10);
         const [seatsPerTable, setSeatsPerTable] = useState(10);
         const [prefix, setPrefix] = useState("T");
+        const [shape, setShape] = useState("circle");
+        const [purpose, setPurpose] = useState("dining table");
+        const [color, setColor] = useState("#ffffff");
+        const [seatSidesConfig, setSeatSidesConfig] = useState("top,bottom");
+        const [showSeats, setShowSeats] = useState(true);
 
         const handleSubmit = (e) => {
           e.preventDefault();
           const tables = Array.from({ length: numTables }, (_, i) => ({
             table_name: `${prefix}${i + 1}`,
             capacity: seatsPerTable,
+            shape,
+            purpose,
+            color,
+            seat_sides: seatSidesConfig.split(',').filter(Boolean).length,
+            seat_sides_config: seatSidesConfig,
+            show_seats: showSeats,
           }));
           onSubmit(tables);
         };
@@ -1613,8 +2428,8 @@
                   </label>
                   <input
                     type="number"
-                    min="1"
-                    max="20"
+                    min="0"
+                    max="200"
                     required
                     className="input-field"
                     value={seatsPerTable}
@@ -1637,6 +2452,64 @@
                   <p className="text-xs text-secondary mt-1">
                     Tables will be named: {prefix}1, {prefix}2, ...
                   </p>
+                </div>
+                <div className="flex space-x-3">
+                  <div className="flex-1">
+                    <label className="block text-sm font-semibold text-primary mb-2">Shape</label>
+                    <select className="input-field" value={shape} onChange={(e) => setShape(e.target.value)}>
+                      <option value="circle">Circle</option>
+                      <option value="rectangle">Rectangle</option>
+                    </select>
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-sm font-semibold text-primary mb-2">Body Color</label>
+                    <input type="color" className="input-field" style={{ height: "42px", padding: "4px", cursor: "pointer" }}
+                      value={color} onChange={(e) => setColor(e.target.value)} />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-primary mb-2">Purpose</label>
+                  <select className="input-field" value={purpose} onChange={(e) => { const v = e.target.value; setPurpose(v); if (v !== "dining table") setSeatsPerTable(0); }}>
+                    <option value="dining table">Dining Table</option>
+                    <option value="stage">Stage</option>
+                    <option value="pillar">Pillar</option>
+                    <option value="carpet">Carpet</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+                {shape === "rectangle" && (
+                  <div>
+                    <label className="block text-sm font-semibold text-primary mb-2">Seat Sides</label>
+                    {(() => {
+                      const activeSides = new Set((seatSidesConfig || '').split(',').filter(Boolean));
+                      const toggle = (side, checked) => {
+                        const s = new Set(activeSides);
+                        checked ? s.add(side) : s.delete(side);
+                        setSeatSidesConfig([...s].join(','));
+                      };
+                      const chk = (side, label) => (
+                        <label key={side} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "14px", cursor: "pointer", userSelect: "none" }}>
+                          <input type="checkbox" checked={activeSides.has(side)} onChange={(e) => toggle(side, e.target.checked)} style={{ width: "15px", height: "15px", cursor: "pointer" }} />
+                          {label}
+                        </label>
+                      );
+                      return (
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "5px" }}>
+                          {chk('top', 'Top')}
+                          <div style={{ display: "flex", gap: "32px" }}>
+                            {chk('left', 'Left')}
+                            {chk('right', 'Right')}
+                          </div>
+                          {chk('bottom', 'Bottom')}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <input type="checkbox" id="modal-show-seats" checked={showSeats} onChange={(e) => setShowSeats(e.target.checked)}
+                    style={{ width: "16px", height: "16px", cursor: "pointer" }} />
+                  <label htmlFor="modal-show-seats" className="text-sm font-semibold text-primary" style={{ cursor: "pointer" }}>Show seats around table</label>
                 </div>
                 <div className="flex space-x-3 pt-4">
                   <button type="submit" className="btn-primary flex-1">
