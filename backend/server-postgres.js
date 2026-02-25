@@ -674,7 +674,7 @@ app.get('/api/events/:eventId/icons', async (req, res) => {
   
   try {
     const result = await pool.query(
-      `SELECT * FROM layout_icons WHERE event_id = $1 ORDER BY created_at`,
+      `SELECT * FROM layout_icons WHERE event_id = $1 ORDER BY id`,
       [eventId]
     );
     

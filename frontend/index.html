@@ -524,8 +524,10 @@
     <script type="text/babel">
       const { useState, useEffect, useRef } = React;
 
-      // Configuration
-      const API_BASE = "https://table-management-system-kagg.onrender.com/api";
+      // Configuration — auto-detect local vs production
+      const API_BASE = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+        ? "http://localhost:3001/api"
+        : "https://table-management-system-kagg.onrender.com/api";
       const GUEST_BASE_URL =
         window.location.origin + window.location.pathname + "#/guest/";
 
@@ -887,10 +889,10 @@
               fetch(`${API_BASE}/events/${eventId}/guests`),
               fetch(`${API_BASE}/events/${eventId}/icons`),
             ]);
-            setEvent(await eventRes.json());
-            setTables(await tablesRes.json());
-            setGuests(await guestsRes.json());
-            setIcons(await iconsRes.json());
+            if (eventRes.ok) setEvent(await eventRes.json());
+            if (tablesRes.ok) setTables(await tablesRes.json());
+            if (guestsRes.ok) setGuests(await guestsRes.json());
+            if (iconsRes.ok) setIcons(await iconsRes.json());
           } catch (error) {
             console.error("Error fetching event data:", error);
           }
