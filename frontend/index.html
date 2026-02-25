@@ -1303,6 +1303,45 @@
         const [selectedIconIds, setSelectedIconIds] = useState(new Set());
         const [textColorEdit, setTextColorEdit] = useState("");
         const [borderColorEdit, setBorderColorEdit] = useState("");
+        const [showDetailPanel, setShowDetailPanel] = useState(true);
+
+        // Undo/redo history (position snapshots only)
+        const historyRef = React.useRef({ past: [], future: [] });
+        const preDragSnapshot = React.useRef(null);
+        const pushHistory = (snapshot) => {
+          historyRef.current.past.push(snapshot);
+          if (historyRef.current.past.length > 50) historyRef.current.past.shift();
+          historyRef.current.future = [];
+        };
+
+        // Text labels on canvas
+        const [textItems, setTextItems] = useState(() => {
+          try { return JSON.parse(localStorage.getItem(`text_items_${eventId}`)) || []; } catch { return []; }
+        });
+        const [selectedTextIds, setSelectedTextIds] = useState(new Set());
+        const [editingTextId, setEditingTextId] = useState(null);
+        const [addingText, setAddingText] = useState(false);
+        const [draggedTextId, setDraggedTextId] = useState(null);
+        const [textDragOffset, setTextDragOffset] = useState({ x: 0, y: 0 });
+        const [textDragMoved, setTextDragMoved] = useState(false);
+
+        React.useEffect(() => {
+          localStorage.setItem(`text_items_${eventId}`, JSON.stringify(textItems));
+        }, [textItems]);
+
+        // Groups
+        const [groups, setGroups] = useState(() => {
+          try { return JSON.parse(localStorage.getItem(`groups_${eventId}`)) || []; } catch { return []; }
+        });
+
+        React.useEffect(() => {
+          localStorage.setItem(`groups_${eventId}`, JSON.stringify(groups));
+        }, [groups]);
+
+        const getGroupMemberIds = (tableId) => {
+          const group = groups.find(g => g.tableIds.includes(tableId));
+          return group ? group.tableIds : [];
+        };
 
         const handleShapeChange = (val) => {
           setShapeEdit(val);
@@ -1359,19 +1398,22 @@
           setClipboard({ type: "tables", data: selected.map(t => ({ ...t })) });
         };
 
-        const getNextTableName = (templateName) => {
+        const getNextTableName = (templateName, usedNames = new Set()) => {
           const match = templateName.match(/^(.*?)(\d+)$/);
           if (!match) {
             const baseName = templateName;
             let counter = 2;
-            while (tables.some(t => t.table_name === `${baseName} ${counter}`)) counter++;
+            while (tables.some(t => t.table_name === `${baseName} ${counter}`) || usedNames.has(`${baseName} ${counter}`)) counter++;
             return `${baseName} ${counter}`;
           }
           const prefix = match[1];
-          const nums = tables
+          const existingNums = tables
             .map(t => { const m = t.table_name.match(/^(.*?)(\d+)$/); return (m && m[1] === prefix) ? parseInt(m[2]) : 0; })
             .filter(n => n > 0);
-          const maxNum = nums.length > 0 ? Math.max(...nums) : 0;
+          const usedNums = [...usedNames]
+            .map(n => { const m = n.match(/^(.*?)(\d+)$/); return (m && m[1] === prefix) ? parseInt(m[2]) : 0; })
+            .filter(n => n > 0);
+          const maxNum = Math.max(0, ...existingNums, ...usedNums);
           return `${prefix}${maxNum + 1}`;
         };
 
@@ -1380,8 +1422,10 @@
           const items = clipboard.data;
           try {
             const newTables = [];
+            const usedNames = new Set();
             for (const t of items) {
-              const newName = getNextTableName(t.table_name);
+              const newName = getNextTableName(t.table_name, usedNames);
+              usedNames.add(newName);
               const newX = Math.min((t.position_x || 0) + 30, layoutWidth - 100);
               const newY = Math.min((t.position_y || 0) + 30, layoutHeight - 80);
               const createResp = await fetch(`${API_BASE}/events/${eventId}/tables`, {
@@ -1542,6 +1586,7 @@
         const handleAlign = async (direction) => {
           const sel = tables.filter(t => selectedIds.has(t.id));
           if (sel.length < 2) return;
+          pushHistory(tables.map(t => ({ id: t.id, position_x: t.position_x, position_y: t.position_y })));
           const getW = t => t.width || (t.shape === "rectangle" ? 140 : 100);
           const getH = t => t.height || (t.shape === "rectangle" ? 80 : 100);
           let updated;
@@ -1616,6 +1661,40 @@
         React.useEffect(() => {
           const onKeyDown = (e) => {
             if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
+            // Undo
+            if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
+              e.preventDefault();
+              if (historyRef.current.past.length === 0) return;
+              const currentSnapshot = tables.map(t => ({ id: t.id, position_x: t.position_x, position_y: t.position_y }));
+              historyRef.current.future.push(currentSnapshot);
+              const prev = historyRef.current.past.pop();
+              setTables(tbl => tbl.map(t => { const s = prev.find(s => s.id === t.id); return s ? { ...t, position_x: s.position_x, position_y: s.position_y } : t; }));
+              return;
+            }
+            // Redo
+            if ((e.ctrlKey || e.metaKey) && (e.key === "y" || (e.key === "z" && e.shiftKey))) {
+              e.preventDefault();
+              if (historyRef.current.future.length === 0) return;
+              const currentSnapshot = tables.map(t => ({ id: t.id, position_x: t.position_x, position_y: t.position_y }));
+              historyRef.current.past.push(currentSnapshot);
+              const next = historyRef.current.future.pop();
+              setTables(tbl => tbl.map(t => { const s = next.find(s => s.id === t.id); return s ? { ...t, position_x: s.position_x, position_y: s.position_y } : t; }));
+              return;
+            }
+            // Group (Ctrl+G)
+            if ((e.ctrlKey || e.metaKey) && (e.key === "g" || e.key === "G") && !e.shiftKey) {
+              e.preventDefault();
+              if (selectedIds.size < 2) return;
+              const newGroup = { id: Date.now(), tableIds: [...selectedIds] };
+              setGroups(prev => [...prev, newGroup]);
+              return;
+            }
+            // Ungroup (Ctrl+Shift+G)
+            if ((e.ctrlKey || e.metaKey) && (e.key === "G" || e.key === "g") && e.shiftKey) {
+              e.preventDefault();
+              setGroups(prev => prev.filter(g => !g.tableIds.some(id => selectedIds.has(id))));
+              return;
+            }
             if ((e.ctrlKey || e.metaKey) && e.key === "a") {
               e.preventDefault();
               setSelectedIds(new Set(tables.map(t => t.id)));
@@ -1634,19 +1713,10 @@
                   const items = clipboard.data;
                   try {
                     const newTbls = [];
+                    const usedNamesKbd = new Set();
                     for (const t of items) {
-                      const baseName = t.table_name;
-                      const match = baseName.match(/^(.*?)(\d+)$/);
-                      let newName;
-                      if (match) {
-                        const pf = match[1];
-                        const nums = tables.map(tbl => { const m = tbl.table_name.match(/^(.*?)(\d+)$/); return (m && m[1] === pf) ? parseInt(m[2]) : 0; }).filter(n => n > 0);
-                        newName = `${pf}${(nums.length > 0 ? Math.max(...nums) : 0) + 1}`;
-                      } else {
-                        let counter = 2;
-                        while (tables.some(tbl => tbl.table_name === `${baseName} ${counter}`)) counter++;
-                        newName = `${baseName} ${counter}`;
-                      }
+                      const newName = getNextTableName(t.table_name, usedNamesKbd);
+                      usedNamesKbd.add(newName);
                       const newX = Math.min((t.position_x || 0) + 30, layoutWidth - 100);
                       const newY = Math.min((t.position_y || 0) + 30, layoutHeight - 80);
                       const resp = await fetch(`${API_BASE}/events/${eventId}/tables`, {
@@ -1663,8 +1733,14 @@
               }
               return;
             }
-            if ((e.key === "Delete" || e.key === "Backspace") && (selectedIds.size > 0 || selectedIconIds.size > 0)) {
+            if ((e.key === "Delete" || e.key === "Backspace") && (selectedIds.size > 0 || selectedIconIds.size > 0 || selectedTextIds.size > 0)) {
               e.preventDefault();
+              // Delete selected text items (no confirm needed, local-only)
+              if (selectedTextIds.size > 0) {
+                setTextItems(prev => prev.filter(ti => !selectedTextIds.has(ti.id)));
+                setSelectedTextIds(new Set());
+              }
+              if (selectedIds.size === 0 && selectedIconIds.size === 0) return;
               const tableNames = tables.filter(t => selectedIds.has(t.id)).map(t => t.table_name);
               const iconCount = selectedIconIds.size;
               let msg = '';
@@ -1689,6 +1765,7 @@
             }
             if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key) && (selectedIds.size > 0 || selectedIconIds.size > 0)) {
               e.preventDefault();
+              pushHistory(tables.map(t => ({ id: t.id, position_x: t.position_x, position_y: t.position_y })));
               const delta = e.shiftKey ? 10 : 1;
               const dx = e.key === "ArrowLeft" ? -delta : e.key === "ArrowRight" ? delta : 0;
               const dy = e.key === "ArrowUp" ? -delta : e.key === "ArrowDown" ? delta : 0;
@@ -1699,12 +1776,14 @@
             if (e.key === "Escape") {
               setSelectedIds(new Set());
               setSelectedIconIds(new Set());
+              setSelectedTextIds(new Set());
               setSelectedTable(null);
+              setAddingText(false);
             }
           };
           window.addEventListener('keydown', onKeyDown);
           return () => window.removeEventListener('keydown', onKeyDown);
-        }, [selectedIds, selectedIconIds, tables, icons, clipboard, layoutWidth, layoutHeight, eventId]);
+        }, [selectedIds, selectedIconIds, selectedTextIds, tables, icons, clipboard, layoutWidth, layoutHeight, eventId, groups]);
 
         // Table drag handlers
         const handleTableMouseDown = (e, table) => {
@@ -1715,6 +1794,8 @@
             setTableDragMoved(false);
             return;
           }
+          // Save snapshot before drag (committed to history only if drag actually happens)
+          preDragSnapshot.current = tables.map(t => ({ id: t.id, position_x: t.position_x, position_y: t.position_y }));
           const rect = e.currentTarget.getBoundingClientRect();
           setDragOffset({ x: e.clientX - rect.left, y: e.clientY - rect.top, ctrlKey: false });
           setDraggedTable(table);
@@ -1775,6 +1856,13 @@
             draggedIconCurrentPos.current = { x, y };
             setIcons((prev) => prev.map((ic) => ic.id === draggedIcon.id ? { ...ic, position_x: x, position_y: y } : ic));
           }
+
+          if (draggedTextId !== null) {
+            setTextDragMoved(true);
+            const x = Math.max(0, e.clientX - canvas.left - textDragOffset.x);
+            const y = Math.max(0, e.clientY - canvas.top - textDragOffset.y);
+            setTextItems(prev => prev.map(ti => ti.id === draggedTextId ? { ...ti, position_x: x, position_y: y } : ti));
+          }
         };
 
         const handleMouseUp = async () => {
@@ -1798,6 +1886,12 @@
           }
 
           if (draggedTable) {
+            if (tableDragMoved && preDragSnapshot.current) {
+              pushHistory(preDragSnapshot.current);
+              preDragSnapshot.current = null;
+            } else {
+              preDragSnapshot.current = null;
+            }
             if (!tableDragMoved) {
               if (dragOffset.ctrlKey) {
                 // Ctrl+Click: toggle in multi-select
@@ -1809,8 +1903,9 @@
                 });
                 setSelectedTable(null);
               } else {
-                // Normal click: single select + open detail panel
-                setSelectedIds(new Set([draggedTable.id]));
+                // Normal click: single select + open detail panel (auto-select group members)
+                const groupMems = getGroupMemberIds(draggedTable.id);
+                setSelectedIds(new Set([draggedTable.id, ...groupMems]));
                 setSelectedTable(draggedTable);
                 setTableNameEdit(draggedTable.table_name);
                 setCapacityEdit(draggedTable.capacity);
@@ -1865,6 +1960,15 @@
             }
             draggedIconCurrentPos.current = null;
             setDraggedIcon(null);
+          }
+
+          if (draggedTextId !== null) {
+            if (!textDragMoved) {
+              // Click: select this text item
+              setSelectedTextIds(new Set([draggedTextId]));
+            }
+            setDraggedTextId(null);
+            setTextDragMoved(false);
           }
         };
 
@@ -1982,6 +2086,21 @@
                   );
                 })()}
                 <button
+                  onClick={() => { setAddingText(v => !v); }}
+                  className="btn-secondary"
+                  style={{ background: addingText ? "#d4af37" : undefined, color: addingText ? "white" : undefined }}
+                  title="Add a text label to the canvas (click canvas to place)"
+                >
+                  🔤 Add Text
+                </button>
+                <button
+                  onClick={() => setShowDetailPanel(v => !v)}
+                  className="btn-secondary"
+                  title={showDetailPanel ? "Hide table settings panel" : "Show table settings panel"}
+                >
+                  {showDetailPanel ? "◀ Settings" : "▶ Settings"}
+                </button>
+                <button
                   onClick={handleClearLayout}
                   className="btn-secondary"
                   style={{ color: "#ef4444" }}
@@ -2041,15 +2160,33 @@
             </div>
 
             <div style={{ fontSize: "11px", color: "#aaa", marginBottom: "4px", userSelect: "none" }}>
-              Click table to select · Ctrl+Click to multi-select · Ctrl+A select all · Ctrl+C copy · Ctrl+V paste · Del delete · Arrow keys move · Shift+Arrow ×10
+              Click to select · Ctrl+Click multi-select · Ctrl+A all · Ctrl+C copy · Ctrl+V paste · Del delete · Arrows move · Shift+Arrow ×10 · Ctrl+Z undo · Ctrl+Y redo · Ctrl+G group · Ctrl+Shift+G ungroup
             </div>
 
             <div style={{ position: "relative" }}>
                 <div
                   ref={canvasRef}
                   className="canvas-container"
-                  style={{ width: `${layoutWidth}px`, height: `${layoutHeight}px`, maxWidth: "100%", overflowX: "auto" }}
-                  onMouseDown={(e) => { if (e.target === canvasRef.current) { setSelectedIds(new Set()); setSelectedIconIds(new Set()); setSelectedTable(null); } }}
+                  style={{ width: `${layoutWidth}px`, height: `${layoutHeight}px`, maxWidth: "100%", overflowX: "auto", cursor: addingText ? "text" : undefined }}
+                  onMouseDown={(e) => {
+                    if (e.target === canvasRef.current) {
+                      if (addingText) {
+                        // Place a new text item at click position
+                        const rect = canvasRef.current.getBoundingClientRect();
+                        const x = e.clientX - rect.left;
+                        const y = e.clientY - rect.top;
+                        const newItem = { id: Date.now(), text: "Text", position_x: Math.round(x), position_y: Math.round(y), fontSize: 18, color: "#2c1810" };
+                        setTextItems(prev => [...prev, newItem]);
+                        setEditingTextId(newItem.id);
+                        setAddingText(false);
+                        return;
+                      }
+                      setSelectedIds(new Set());
+                      setSelectedIconIds(new Set());
+                      setSelectedTextIds(new Set());
+                      setSelectedTable(null);
+                    }
+                  }}
                   onMouseMove={handleMouseMove}
                   onMouseUp={handleMouseUp}
                   onMouseLeave={handleMouseUp}
@@ -2188,6 +2325,10 @@
                         {!isDining && (
                           <div style={{ fontSize: "10px", color: "#888", textTransform: "capitalize" }}>{tablePurpose}</div>
                         )}
+                        {/* Group badge */}
+                        {(() => { const gi = groups.findIndex(g => g.tableIds.includes(table.id)); return gi >= 0 ? (
+                          <div style={{ position: "absolute", top: -8, left: -8, width: 16, height: 16, background: "#7c3aed", color: "white", borderRadius: "50%", fontSize: "9px", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 25, boxShadow: "0 1px 3px rgba(0,0,0,0.3)" }} title={`Group ${gi + 1}`}>{gi + 1}</div>
+                        ) : null; })()}
                         {/* Resize handle */}
                         <div
                           onMouseDown={(e) => {
@@ -2202,8 +2343,82 @@
                     );
                   })}
 
+                  {/* Text labels */}
+                  {textItems.map(ti => (
+                    <div
+                      key={ti.id}
+                      style={{
+                        position: "absolute",
+                        left: ti.position_x,
+                        top: ti.position_y,
+                        fontSize: `${ti.fontSize || 18}px`,
+                        color: ti.color || "#2c1810",
+                        fontWeight: 600,
+                        cursor: draggedTextId === ti.id ? "grabbing" : "grab",
+                        userSelect: "none",
+                        outline: selectedTextIds.has(ti.id) ? "2px dashed #d4af37" : "none",
+                        outlineOffset: "3px",
+                        padding: "2px 4px",
+                        borderRadius: "3px",
+                        background: selectedTextIds.has(ti.id) ? "rgba(212,175,55,0.08)" : "transparent",
+                        zIndex: 15,
+                        minWidth: "30px",
+                        whiteSpace: "pre",
+                      }}
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        if (editingTextId === ti.id) return;
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        setTextDragOffset({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+                        setDraggedTextId(ti.id);
+                        setTextDragMoved(false);
+                      }}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        setEditingTextId(ti.id);
+                        setSelectedTextIds(new Set([ti.id]));
+                      }}
+                    >
+                      {editingTextId === ti.id ? (
+                        <input
+                          autoFocus
+                          type="text"
+                          value={ti.text}
+                          onChange={(ev) => setTextItems(prev => prev.map(x => x.id === ti.id ? { ...x, text: ev.target.value } : x))}
+                          onBlur={() => setEditingTextId(null)}
+                          onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === "Escape") { ev.preventDefault(); setEditingTextId(null); } ev.stopPropagation(); }}
+                          style={{ fontSize: `${ti.fontSize || 18}px`, color: ti.color || "#2c1810", fontWeight: 600, border: "none", background: "transparent", outline: "1px solid #d4af37", padding: "0", width: `${Math.max(60, ti.text.length * 12)}px` }}
+                        />
+                      ) : ti.text}
+                      {selectedTextIds.has(ti.id) && !editingTextId && (
+                        <span style={{ display: "inline-flex", gap: "4px", marginLeft: "6px", verticalAlign: "middle" }}>
+                          <button
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onClick={(e) => { e.stopPropagation(); const s = prompt("Font size (px):", ti.fontSize || 18); if (s) setTextItems(prev => prev.map(x => x.id === ti.id ? { ...x, fontSize: Math.max(8, parseInt(s) || 18) } : x)); }}
+                            style={{ fontSize: "10px", padding: "1px 4px", background: "#f9f5ee", border: "1px solid #d4af37", borderRadius: "3px", cursor: "pointer", color: "#2c1810", lineHeight: 1.2 }}
+                            title="Change font size"
+                          >Aa</button>
+                          <input
+                            type="color"
+                            value={ti.color || "#2c1810"}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onChange={(e) => setTextItems(prev => prev.map(x => x.id === ti.id ? { ...x, color: e.target.value } : x))}
+                            style={{ width: "20px", height: "18px", border: "none", padding: "0", cursor: "pointer", background: "none" }}
+                            title="Text color"
+                          />
+                          <button
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onClick={(e) => { e.stopPropagation(); setTextItems(prev => prev.filter(x => x.id !== ti.id)); setSelectedTextIds(new Set()); }}
+                            style={{ fontSize: "10px", padding: "1px 4px", background: "#fee2e2", border: "1px solid #ef4444", borderRadius: "3px", cursor: "pointer", color: "#ef4444", lineHeight: 1.2 }}
+                            title="Delete text"
+                          >✕</button>
+                        </span>
+                      )}
+                    </div>
+                  ))}
+
                   {/* Table detail panel */}
-                  {selectedTable && (
+                  {selectedTable && showDetailPanel && (
                     <TableDetailPanel
                       key={selectedTable.id}
                       table={tables.find((t) => t.id === selectedTable.id) || selectedTable}
@@ -3147,13 +3362,11 @@
                     <input type="number" min="40" max="500" className="input-field" value={tableWidth}
                       onChange={(e) => setTableWidth(Math.max(40, parseInt(e.target.value) || 40))} />
                   </div>
-                  {shape === "rectangle" && (
-                    <div className="flex-1">
-                      <label className="block text-sm font-semibold text-primary mb-2">Height (px)</label>
-                      <input type="number" min="40" max="500" className="input-field" value={tableHeight}
-                        onChange={(e) => setTableHeight(Math.max(40, parseInt(e.target.value) || 40))} />
-                    </div>
-                  )}
+                  <div className="flex-1">
+                    <label className="block text-sm font-semibold text-primary mb-2">Height (px)</label>
+                    <input type="number" min="40" max="500" className="input-field" value={tableHeight}
+                      onChange={(e) => setTableHeight(Math.max(40, parseInt(e.target.value) || 40))} />
+                  </div>
                   <div className="flex-1">
                     <label className="block text-sm font-semibold text-primary mb-2">Columns</label>
                     <input type="number" min="1" max="20" className="input-field" value={gridCols}
