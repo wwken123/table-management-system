@@ -1387,11 +1387,11 @@
               const createResp = await fetch(`${API_BASE}/events/${eventId}/tables`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ tables: [{ table_name: newName, capacity: t.capacity, shape: t.shape || "circle", purpose: t.purpose || "dining table", color: t.color || "#ffffff", seat_sides: t.seat_sides ?? 2, seat_sides_config: t.seat_sides_config || null, show_seats: t.show_seats ?? true, width: t.width || null, height: t.height || null, text_color: t.text_color || null, border_color: t.border_color || null, position_x: newX, position_y: newY }] }),
+                body: JSON.stringify({ tables: [{ table_name: newName, capacity: t.capacity, shape: t.shape || "circle", purpose: t.purpose || "dining table", color: t.color || "#ffffff", seat_sides: t.seat_sides ?? 2, seat_sides_config: t.seat_sides_config || null, show_seats: t.show_seats ?? true, width: t.width || null, height: t.height || null, rotation: t.rotation ?? 0, text_color: t.text_color || null, border_color: t.border_color || null, position_x: newX, position_y: newY }] }),
               });
               const createData = await createResp.json();
               const newTable = createData.tables?.[0];
-              if (newTable) newTables.push({ ...newTable, position_x: newX, position_y: newY, seats_occupied: 0 });
+              if (newTable) newTables.push({ ...newTable, position_x: newX, position_y: newY, rotation: t.rotation ?? 0, seats_occupied: 0 });
             }
             if (newTables.length > 0) setTables(prev => [...prev, ...newTables]);
           } catch (err) {
@@ -1420,6 +1420,8 @@
         const [draggedTable, setDraggedTable] = useState(null);
         const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
         const [tableDragMoved, setTableDragMoved] = useState(false);
+        const [multiDragInitialPositions, setMultiDragInitialPositions] = useState(null);
+        const [multiDragStartMouse, setMultiDragStartMouse] = useState(null);
 
         // Table resize
         const [resizingTable, setResizingTable] = useState(null); // { id, shape, startW, startH }
@@ -1537,6 +1539,80 @@
           }
         };
 
+        const handleAlign = async (direction) => {
+          const sel = tables.filter(t => selectedIds.has(t.id));
+          if (sel.length < 2) return;
+          const getW = t => t.width || (t.shape === "rectangle" ? 140 : 100);
+          const getH = t => t.height || (t.shape === "rectangle" ? 80 : 100);
+          let updated;
+          switch (direction) {
+            case "left": {
+              const ref = Math.min(...sel.map(t => t.position_x));
+              updated = sel.map(t => ({ ...t, position_x: ref }));
+              break;
+            }
+            case "right": {
+              const ref = Math.max(...sel.map(t => t.position_x + getW(t)));
+              updated = sel.map(t => ({ ...t, position_x: ref - getW(t) }));
+              break;
+            }
+            case "top": {
+              const ref = Math.min(...sel.map(t => t.position_y));
+              updated = sel.map(t => ({ ...t, position_y: ref }));
+              break;
+            }
+            case "bottom": {
+              const ref = Math.max(...sel.map(t => t.position_y + getH(t)));
+              updated = sel.map(t => ({ ...t, position_y: ref - getH(t) }));
+              break;
+            }
+            case "centerH": {
+              const minY = Math.min(...sel.map(t => t.position_y));
+              const maxB = Math.max(...sel.map(t => t.position_y + getH(t)));
+              const cy = (minY + maxB) / 2;
+              updated = sel.map(t => ({ ...t, position_y: Math.round(cy - getH(t) / 2) }));
+              break;
+            }
+            case "centerV": {
+              const minX = Math.min(...sel.map(t => t.position_x));
+              const maxR = Math.max(...sel.map(t => t.position_x + getW(t)));
+              const cx = (minX + maxR) / 2;
+              updated = sel.map(t => ({ ...t, position_x: Math.round(cx - getW(t) / 2) }));
+              break;
+            }
+            case "distributeH": {
+              const sorted = [...sel].sort((a, b) => a.position_x - b.position_x);
+              const leftmost = sorted[0].position_x;
+              const rightmost = sorted[sorted.length - 1].position_x + getW(sorted[sorted.length - 1]);
+              const totalW = sorted.reduce((s, t) => s + getW(t), 0);
+              const gap = (rightmost - leftmost - totalW) / (sorted.length - 1);
+              let x = leftmost;
+              updated = sorted.map(t => { const u = { ...t, position_x: Math.round(x) }; x += getW(t) + gap; return u; });
+              break;
+            }
+            case "distributeV": {
+              const sorted = [...sel].sort((a, b) => a.position_y - b.position_y);
+              const topmost = sorted[0].position_y;
+              const bottommost = sorted[sorted.length - 1].position_y + getH(sorted[sorted.length - 1]);
+              const totalH = sorted.reduce((s, t) => s + getH(t), 0);
+              const gap = (bottommost - topmost - totalH) / (sorted.length - 1);
+              let y = topmost;
+              updated = sorted.map(t => { const u = { ...t, position_y: Math.round(y) }; y += getH(t) + gap; return u; });
+              break;
+            }
+            default: return;
+          }
+          const updMap = Object.fromEntries(updated.map(t => [t.id, t]));
+          setTables(prev => prev.map(t => updMap[t.id] ? { ...t, position_x: updMap[t.id].position_x, position_y: updMap[t.id].position_y } : t));
+          try {
+            await Promise.all(updated.map(t => fetch(`${API_BASE}/tables/${t.id}/position`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ position_x: t.position_x, position_y: t.position_y }),
+            })));
+          } catch (err) { console.error("Align save error:", err); }
+        };
+
         React.useEffect(() => {
           const onKeyDown = (e) => {
             if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
@@ -1575,11 +1651,11 @@
                       const newY = Math.min((t.position_y || 0) + 30, layoutHeight - 80);
                       const resp = await fetch(`${API_BASE}/events/${eventId}/tables`, {
                         method: "POST", headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ tables: [{ table_name: newName, capacity: t.capacity, shape: t.shape || "circle", purpose: t.purpose || "dining table", color: t.color || "#ffffff", seat_sides: t.seat_sides ?? 2, seat_sides_config: t.seat_sides_config || null, show_seats: t.show_seats ?? true, width: t.width || null, height: t.height || null, text_color: t.text_color || null, border_color: t.border_color || null, position_x: newX, position_y: newY }] }),
+                        body: JSON.stringify({ tables: [{ table_name: newName, capacity: t.capacity, shape: t.shape || "circle", purpose: t.purpose || "dining table", color: t.color || "#ffffff", seat_sides: t.seat_sides ?? 2, seat_sides_config: t.seat_sides_config || null, show_seats: t.show_seats ?? true, width: t.width || null, height: t.height || null, rotation: t.rotation ?? 0, text_color: t.text_color || null, border_color: t.border_color || null, position_x: newX, position_y: newY }] }),
                       });
                       const d = await resp.json();
                       const nt = d.tables?.[0];
-                      if (nt) newTbls.push({ ...nt, position_x: newX, position_y: newY, seats_occupied: 0 });
+                      if (nt) newTbls.push({ ...nt, position_x: newX, position_y: newY, rotation: t.rotation ?? 0, seats_occupied: 0 });
                     }
                     if (newTbls.length > 0) setTables(prev => [...prev, ...newTbls]);
                   } catch (err) { console.error("Error pasting:", err); }
@@ -1632,10 +1708,24 @@
 
         // Table drag handlers
         const handleTableMouseDown = (e, table) => {
+          if (e.ctrlKey || e.metaKey) {
+            // Ctrl+Click: only toggle selection, no drag
+            setDragOffset({ x: 0, y: 0, ctrlKey: true });
+            setDraggedTable(table);
+            setTableDragMoved(false);
+            return;
+          }
           const rect = e.currentTarget.getBoundingClientRect();
-          setDragOffset({ x: e.clientX - rect.left, y: e.clientY - rect.top, ctrlKey: e.ctrlKey || e.metaKey });
+          setDragOffset({ x: e.clientX - rect.left, y: e.clientY - rect.top, ctrlKey: false });
           setDraggedTable(table);
           setTableDragMoved(false);
+          // If this table is part of a multi-selection, record all selected tables' start positions
+          if (selectedIds.has(table.id) && selectedIds.size > 1) {
+            const initPos = {};
+            tables.forEach(t => { if (selectedIds.has(t.id)) initPos[t.id] = { x: t.position_x, y: t.position_y }; });
+            setMultiDragInitialPositions(initPos);
+            setMultiDragStartMouse({ x: e.clientX, y: e.clientY });
+          }
         };
 
         const handleMouseMove = (e) => {
@@ -1659,12 +1749,24 @@
 
           if (draggedTable) {
             setTableDragMoved(true);
-            const t = tables.find(tbl => tbl.id === draggedTable.id);
-            const tW = t?.width || (draggedTable.shape === "rectangle" ? 140 : 100);
-            const tH = t?.height || (draggedTable.shape === "rectangle" ? 80 : 100);
-            const x = Math.max(0, Math.min(canvas.width - tW, e.clientX - canvas.left - dragOffset.x));
-            const y = Math.max(0, Math.min(canvas.height - tH, e.clientY - canvas.top - dragOffset.y));
-            setTables((prev) => prev.map((t) => t.id === draggedTable.id ? { ...t, position_x: x, position_y: y } : t));
+            if (multiDragInitialPositions && multiDragStartMouse) {
+              // Multi-table drag: move all selected tables by the same delta
+              const dx = e.clientX - multiDragStartMouse.x;
+              const dy = e.clientY - multiDragStartMouse.y;
+              setTables(prev => prev.map(t => {
+                const init = multiDragInitialPositions[t.id];
+                if (!init) return t;
+                return { ...t, position_x: Math.max(0, init.x + dx), position_y: Math.max(0, init.y + dy) };
+              }));
+            } else {
+              // Single-table drag
+              const t = tables.find(tbl => tbl.id === draggedTable.id);
+              const tW = t?.width || (draggedTable.shape === "rectangle" ? 140 : 100);
+              const tH = t?.height || (draggedTable.shape === "rectangle" ? 80 : 100);
+              const x = Math.max(0, Math.min(canvas.width - tW, e.clientX - canvas.left - dragOffset.x));
+              const y = Math.max(0, Math.min(canvas.height - tH, e.clientY - canvas.top - dragOffset.y));
+              setTables(prev => prev.map(t => t.id === draggedTable.id ? { ...t, position_x: x, position_y: y } : t));
+            }
           }
 
           if (draggedIcon) {
@@ -1690,6 +1792,8 @@
             }
             setResizingTable(null);
             setResizeStartPos(null);
+            setMultiDragInitialPositions(null);
+            setMultiDragStartMouse(null);
             return;
           }
 
@@ -1721,16 +1825,31 @@
               }
             } else {
               try {
-                await fetch(`${API_BASE}/tables/${draggedTable.id}/position`, {
-                  method: "PUT",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ position_x: draggedTable.position_x, position_y: draggedTable.position_y }),
-                });
+                if (multiDragInitialPositions) {
+                  // Save positions for all multi-dragged tables
+                  await Promise.all(
+                    tables
+                      .filter(t => multiDragInitialPositions[t.id])
+                      .map(t => fetch(`${API_BASE}/tables/${t.id}/position`, {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ position_x: t.position_x, position_y: t.position_y }),
+                      }))
+                  );
+                } else {
+                  await fetch(`${API_BASE}/tables/${draggedTable.id}/position`, {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ position_x: draggedTable.position_x, position_y: draggedTable.position_y }),
+                  });
+                }
               } catch (error) {
                 console.error("Error updating position:", error);
               }
             }
             setDraggedTable(null);
+            setMultiDragInitialPositions(null);
+            setMultiDragStartMouse(null);
           }
 
           if (draggedIcon) {
@@ -1844,6 +1963,24 @@
                     🗑 Delete ({selectedIds.size + selectedIconIds.size})
                   </button>
                 )}
+                {selectedIds.size >= 2 && (() => {
+                  const btnStyle = { padding: "3px 7px", fontSize: "13px", background: "#f9f5ee", border: "1px solid #d4af37", borderRadius: "5px", cursor: "pointer", color: "#2c1810", lineHeight: 1 };
+                  return (
+                    <div style={{ display: "flex", alignItems: "center", gap: "3px", paddingLeft: "8px", borderLeft: "1px solid #e8dfd0" }}>
+                      <span style={{ fontSize: "11px", color: "#8b6f47", fontWeight: 600, marginRight: "2px", whiteSpace: "nowrap" }}>Align:</span>
+                      <button onClick={() => handleAlign("left")}   style={btnStyle} title="Align left edges">⬤←</button>
+                      <button onClick={() => handleAlign("centerV")} style={btnStyle} title="Center horizontally">⬤↔</button>
+                      <button onClick={() => handleAlign("right")}  style={btnStyle} title="Align right edges">→⬤</button>
+                      <button onClick={() => handleAlign("top")}    style={btnStyle} title="Align top edges">⬤↑</button>
+                      <button onClick={() => handleAlign("centerH")} style={btnStyle} title="Center vertically">⬤↕</button>
+                      <button onClick={() => handleAlign("bottom")} style={btnStyle} title="Align bottom edges">⬤↓</button>
+                      {selectedIds.size >= 3 && <>
+                        <button onClick={() => handleAlign("distributeH")} style={btnStyle} title="Distribute evenly (horizontal)">⇿H</button>
+                        <button onClick={() => handleAlign("distributeV")} style={btnStyle} title="Distribute evenly (vertical)">⇿V</button>
+                      </>}
+                    </div>
+                  );
+                })()}
                 <button
                   onClick={handleClearLayout}
                   className="btn-secondary"

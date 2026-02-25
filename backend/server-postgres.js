@@ -319,8 +319,8 @@ app.post('/api/events/:eventId/tables', async (req, res) => {
       const y = (table.position_y != null) ? table.position_y : defaultY;
 
       const result = await client.query(
-        `INSERT INTO tables (event_id, table_name, capacity, position_x, position_y, shape, purpose, color, seat_sides, seat_sides_config, show_seats, width, height, text_color, border_color) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
-        [eventId, table.table_name, table.capacity, x, y, table.shape || 'circle', table.purpose || 'dining table', table.color || '#ffffff', table.seat_sides ?? 2, table.seat_sides_config || null, table.show_seats ?? true, table.width || null, table.height || null, table.text_color || null, table.border_color || null]
+        `INSERT INTO tables (event_id, table_name, capacity, position_x, position_y, shape, purpose, color, seat_sides, seat_sides_config, show_seats, width, height, rotation, text_color, border_color) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *`,
+        [eventId, table.table_name, table.capacity, x, y, table.shape || 'circle', table.purpose || 'dining table', table.color || '#ffffff', table.seat_sides ?? 2, table.seat_sides_config || null, table.show_seats ?? true, table.width || null, table.height || null, table.rotation ?? 0, table.text_color || null, table.border_color || null]
       );
       createdTables.push(result.rows[0]);
       created++;
