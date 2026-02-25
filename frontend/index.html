@@ -1658,6 +1658,42 @@
           } catch (err) { console.error("Align save error:", err); }
         };
 
+        const handleMultiApply = async (changes) => {
+          pushHistory(tables.map(t => ({ id: t.id, position_x: t.position_x, position_y: t.position_y })));
+          setTables(prev => prev.map(t => selectedIds.has(t.id) ? { ...t, ...changes } : t));
+          const sel = tables.filter(t => selectedIds.has(t.id));
+          try {
+            await Promise.all(sel.map(async t => {
+              const u = { ...t, ...changes };
+              const tasks = [];
+              if ('position_x' in changes || 'position_y' in changes) {
+                tasks.push(fetch(`${API_BASE}/tables/${t.id}/position`, {
+                  method: "PUT", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ position_x: u.position_x, position_y: u.position_y }),
+                }));
+              }
+              tasks.push(fetch(`${API_BASE}/tables/${t.id}`, {
+                method: "PUT", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  table_name: u.table_name, capacity: u.capacity ?? t.capacity,
+                  shape: u.shape || t.shape || "circle",
+                  purpose: u.purpose || t.purpose || "dining table",
+                  color: u.color || t.color || "#ffffff",
+                  text_color: u.text_color !== undefined ? u.text_color : (t.text_color || null),
+                  border_color: u.border_color !== undefined ? u.border_color : (t.border_color || null),
+                  seat_sides: u.seat_sides ?? t.seat_sides ?? 2,
+                  seat_sides_config: u.seat_sides_config ?? t.seat_sides_config ?? null,
+                  show_seats: u.show_seats ?? t.show_seats ?? true,
+                  width: u.width || t.width || null,
+                  height: u.height || t.height || null,
+                  rotation: u.rotation ?? t.rotation ?? 0,
+                }),
+              }));
+              return Promise.all(tasks);
+            }));
+          } catch (err) { console.error("Multi-apply error:", err); }
+        };
+
         React.useEffect(() => {
           const onKeyDown = (e) => {
             if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
@@ -2069,6 +2105,7 @@
                 )}
                 {selectedIds.size >= 2 && (() => {
                   const btnStyle = { padding: "3px 7px", fontSize: "13px", background: "#f9f5ee", border: "1px solid #d4af37", borderRadius: "5px", cursor: "pointer", color: "#2c1810", lineHeight: 1 };
+                  const grpBtnStyle = { padding: "3px 7px", fontSize: "13px", background: "#ede9fe", border: "1px solid #7c3aed", borderRadius: "5px", cursor: "pointer", color: "#5b21b6", lineHeight: 1 };
                   return (
                     <div style={{ display: "flex", alignItems: "center", gap: "3px", paddingLeft: "8px", borderLeft: "1px solid #e8dfd0" }}>
                       <span style={{ fontSize: "11px", color: "#8b6f47", fontWeight: 600, marginRight: "2px", whiteSpace: "nowrap" }}>Align:</span>
@@ -2082,6 +2119,14 @@
                         <button onClick={() => handleAlign("distributeH")} style={btnStyle} title="Distribute evenly (horizontal)">⇿H</button>
                         <button onClick={() => handleAlign("distributeV")} style={btnStyle} title="Distribute evenly (vertical)">⇿V</button>
                       </>}
+                      <button
+                        onClick={() => setGroups(prev => [...prev, { id: Date.now(), tableIds: [...selectedIds] }])}
+                        style={grpBtnStyle} title="Group selected tables (Ctrl+G)"
+                      >🔗 Group</button>
+                      <button
+                        onClick={() => setGroups(prev => prev.filter(g => !g.tableIds.some(id => selectedIds.has(id))))}
+                        style={grpBtnStyle} title="Ungroup selected tables (Ctrl+Shift+G)"
+                      >🔓 Ungroup</button>
                     </div>
                   );
                 })()}
@@ -2092,13 +2137,6 @@
                   title="Add a text label to the canvas (click canvas to place)"
                 >
                   🔤 Add Text
-                </button>
-                <button
-                  onClick={() => setShowDetailPanel(v => !v)}
-                  className="btn-secondary"
-                  title={showDetailPanel ? "Hide table settings panel" : "Show table settings panel"}
-                >
-                  {showDetailPanel ? "◀ Settings" : "▶ Settings"}
                 </button>
                 <button
                   onClick={handleClearLayout}
@@ -2418,6 +2456,17 @@
                   ))}
 
                   {/* Table detail panel */}
+                  {/* Multi-select settings panel */}
+                  {selectedIds.size >= 2 && !selectedTable && showDetailPanel && (
+                    <MultiSelectPanel
+                      key={[...selectedIds].sort().join(',')}
+                      selectedTables={tables.filter(t => selectedIds.has(t.id))}
+                      onApply={handleMultiApply}
+                      onClose={() => { setSelectedIds(new Set()); setSelectedTable(null); }}
+                    />
+                  )}
+
+                  {/* Single-table detail panel */}
                   {selectedTable && showDetailPanel && (
                     <TableDetailPanel
                       key={selectedTable.id}
@@ -2449,6 +2498,37 @@
                       onDelete={handleDeleteTable}
                       onPositionChange={handlePositionChange}
                     />
+                  )}
+
+                  {/* Panel toggle tab — always visible at right edge of canvas when a table/group is selected */}
+                  {(selectedTable || selectedIds.size >= 1) && (
+                    <button
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={(e) => { e.stopPropagation(); setShowDetailPanel(v => !v); }}
+                      style={{
+                        position: "absolute",
+                        right: showDetailPanel ? 260 : 0,
+                        top: "50%",
+                        transform: "translateY(-50%)",
+                        zIndex: 100,
+                        background: "#fffdf7",
+                        border: "1px solid rgba(212,175,55,0.5)",
+                        borderRight: showDetailPanel ? "none" : "1px solid rgba(212,175,55,0.5)",
+                        borderLeft: !showDetailPanel ? "none" : "1px solid rgba(212,175,55,0.5)",
+                        padding: "12px 4px",
+                        cursor: "pointer",
+                        fontSize: "11px",
+                        color: "#8b6f47",
+                        borderRadius: showDetailPanel ? "5px 0 0 5px" : "0 5px 5px 0",
+                        writingMode: "vertical-rl",
+                        lineHeight: 1,
+                        boxShadow: showDetailPanel ? "-2px 0 6px rgba(0,0,0,0.06)" : "2px 0 6px rgba(0,0,0,0.06)",
+                        userSelect: "none",
+                      }}
+                      title={showDetailPanel ? "Hide settings panel" : "Show settings panel"}
+                    >
+                      {showDetailPanel ? "▶" : "◀"}
+                    </button>
                   )}
                 </div>
               </div>
@@ -3221,6 +3301,176 @@
               >
                 🗑 Delete
               </button>
+            </div>
+          </div>
+        );
+      }
+
+      // Multi-Select Settings Panel
+      function MultiSelectPanel({ selectedTables, onApply, onClose }) {
+        const n = selectedTables.length;
+
+        // Compute shared value across all selected tables; undefined = mixed
+        const shared = (field) => {
+          const vals = selectedTables.map(t => t[field]);
+          if (vals.length === 0) return undefined;
+          return vals.every(v => String(v) === String(vals[0])) ? vals[0] : undefined;
+        };
+
+        const sv = (field) => { const v = shared(field); return v !== undefined ? String(v) : ''; };
+        const svColor = (field) => { const v = shared(field); return (v && typeof v === 'string' && v.startsWith('#')) ? v : ''; };
+
+        const [posX, setPosX] = useState(() => sv('position_x'));
+        const [posY, setPosY] = useState(() => sv('position_y'));
+        const [width, setWidth] = useState(() => sv('width'));
+        const [height, setHeight] = useState(() => sv('height'));
+        const [rotation, setRotation] = useState(() => sv('rotation'));
+        const [capacity, setCapacity] = useState(() => sv('capacity'));
+        const [color, setColor] = useState(() => svColor('color') || '#ffffff');
+        const [colorMixed, setColorMixed] = useState(() => shared('color') === undefined);
+        const [textColor, setTextColor] = useState(() => svColor('text_color'));
+        const [textColorMixed, setTextColorMixed] = useState(() => shared('text_color') === undefined);
+        const [borderColor, setBorderColor] = useState(() => svColor('border_color'));
+        const [borderColorMixed, setBorderColorMixed] = useState(() => shared('border_color') === undefined);
+        const [shape, setShape] = useState(() => sv('shape') || '');
+
+        const labelStyle = { fontSize: "11px", fontWeight: 600, color: "#8b6f47", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "3px", display: "block" };
+        const inputStyle = { width: "100%", padding: "5px 8px", fontSize: "13px", border: "1px solid rgba(212,175,55,0.4)", borderRadius: "5px", background: "#fffdf7", boxSizing: "border-box", color: "#2c1810" };
+        const sectionStyle = { padding: "10px 14px", borderBottom: "1px solid rgba(212,175,55,0.15)" };
+
+        const handleApply = () => {
+          const changes = {};
+          if (posX !== '') changes.position_x = Math.max(0, parseInt(posX) || 0);
+          if (posY !== '') changes.position_y = Math.max(0, parseInt(posY) || 0);
+          if (width !== '') changes.width = Math.max(40, parseInt(width) || 40);
+          if (height !== '') changes.height = Math.max(40, parseInt(height) || 40);
+          if (rotation !== '') changes.rotation = parseInt(rotation) || 0;
+          if (capacity !== '') changes.capacity = Math.max(0, parseInt(capacity) || 0);
+          if (!colorMixed) changes.color = color;
+          if (!textColorMixed) changes.text_color = textColor || null;
+          if (!borderColorMixed) changes.border_color = borderColor || null;
+          if (shape) changes.shape = shape;
+          if (Object.keys(changes).length > 0) onApply(changes);
+        };
+
+        return (
+          <div className="table-detail-panel" style={{ zIndex: 25 }}>
+            {/* Header */}
+            <div style={{ padding: "12px 14px 10px", borderBottom: "2px solid rgba(212,175,55,0.2)", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
+              <div>
+                <div style={{ fontFamily: "Cormorant Garamond, serif", fontSize: "16px", fontWeight: 700, color: "#2c1810" }}>
+                  {n} Tables Selected
+                </div>
+                <div style={{ fontSize: "11px", color: "#8b6f47", marginTop: "2px" }}>Edit shared settings below</div>
+              </div>
+              <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "16px", color: "#999", lineHeight: 1 }}>✕</button>
+            </div>
+
+            <div style={{ overflowY: "auto", flex: 1 }}>
+              {/* Position */}
+              <div style={sectionStyle}>
+                <div style={{ ...labelStyle, marginBottom: "6px" }}>Position</div>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ fontSize: "11px", color: "#999" }}>X</label>
+                    <input type="number" style={inputStyle} value={posX} placeholder="Mixed" onChange={e => setPosX(e.target.value)} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ fontSize: "11px", color: "#999" }}>Y</label>
+                    <input type="number" style={inputStyle} value={posY} placeholder="Mixed" onChange={e => setPosY(e.target.value)} />
+                  </div>
+                </div>
+              </div>
+
+              {/* Size */}
+              <div style={sectionStyle}>
+                <div style={{ ...labelStyle, marginBottom: "6px" }}>Size</div>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ fontSize: "11px", color: "#999" }}>W</label>
+                    <input type="number" style={inputStyle} value={width} placeholder="Mixed" onChange={e => setWidth(e.target.value)} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ fontSize: "11px", color: "#999" }}>H</label>
+                    <input type="number" style={inputStyle} value={height} placeholder="Mixed" onChange={e => setHeight(e.target.value)} />
+                  </div>
+                </div>
+                <div style={{ marginTop: "6px" }}>
+                  <label style={{ fontSize: "11px", color: "#999" }}>Rotation (°)</label>
+                  <input type="number" style={inputStyle} value={rotation} placeholder="Mixed" onChange={e => setRotation(e.target.value)} />
+                </div>
+              </div>
+
+              {/* Capacity & Shape */}
+              <div style={sectionStyle}>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={labelStyle}>Capacity</div>
+                    <input type="number" min="0" style={inputStyle} value={capacity} placeholder="Mixed" onChange={e => setCapacity(e.target.value)} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={labelStyle}>Shape</div>
+                    <select style={{ ...inputStyle, cursor: "pointer" }} value={shape} onChange={e => setShape(e.target.value)}>
+                      <option value="">— Mixed —</option>
+                      <option value="circle">Circle</option>
+                      <option value="rectangle">Rectangle</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Colors */}
+              <div style={sectionStyle}>
+                <div style={labelStyle}>Colors</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <label style={{ fontSize: "12px", color: "#666", width: "52px", flexShrink: 0 }}>Body</label>
+                    {colorMixed ? (
+                      <button onClick={() => setColorMixed(false)} style={{ flex: 1, fontSize: "11px", padding: "4px 8px", background: "#f3f4f6", border: "1px solid #d1d5db", borderRadius: "4px", cursor: "pointer", color: "#666" }}>Mixed — click to set</button>
+                    ) : (
+                      <>
+                        <input type="color" value={color} onChange={e => setColor(e.target.value)} style={{ width: "36px", height: "28px", padding: "2px", border: "1px solid rgba(212,175,55,0.4)", borderRadius: "4px", cursor: "pointer" }} />
+                        <button onClick={() => setColorMixed(true)} style={{ fontSize: "10px", color: "#999", background: "none", border: "none", cursor: "pointer" }}>Keep mixed</button>
+                      </>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <label style={{ fontSize: "12px", color: "#666", width: "52px", flexShrink: 0 }}>Text</label>
+                    {textColorMixed ? (
+                      <button onClick={() => setTextColorMixed(false)} style={{ flex: 1, fontSize: "11px", padding: "4px 8px", background: "#f3f4f6", border: "1px solid #d1d5db", borderRadius: "4px", cursor: "pointer", color: "#666" }}>Mixed — click to set</button>
+                    ) : (
+                      <>
+                        <input type="color" value={textColor || '#2c1810'} onChange={e => setTextColor(e.target.value)} style={{ width: "36px", height: "28px", padding: "2px", border: "1px solid rgba(212,175,55,0.4)", borderRadius: "4px", cursor: "pointer" }} />
+                        <button onClick={() => { setTextColor(''); setTextColorMixed(true); }} style={{ fontSize: "10px", color: "#999", background: "none", border: "none", cursor: "pointer" }}>Reset</button>
+                      </>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <label style={{ fontSize: "12px", color: "#666", width: "52px", flexShrink: 0 }}>Border</label>
+                    {borderColorMixed ? (
+                      <button onClick={() => setBorderColorMixed(false)} style={{ flex: 1, fontSize: "11px", padding: "4px 8px", background: "#f3f4f6", border: "1px solid #d1d5db", borderRadius: "4px", cursor: "pointer", color: "#666" }}>Mixed — click to set</button>
+                    ) : (
+                      <>
+                        <input type="color" value={borderColor || '#d4af37'} onChange={e => setBorderColor(e.target.value)} style={{ width: "36px", height: "28px", padding: "2px", border: "1px solid rgba(212,175,55,0.4)", borderRadius: "4px", cursor: "pointer" }} />
+                        <button onClick={() => { setBorderColor(''); setBorderColorMixed(true); }} style={{ fontSize: "10px", color: "#999", background: "none", border: "none", cursor: "pointer" }}>Reset</button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Apply button */}
+            <div style={{ padding: "12px 14px", borderTop: "1px solid rgba(212,175,55,0.2)", flexShrink: 0 }}>
+              <button
+                onClick={handleApply}
+                style={{ width: "100%", padding: "9px", background: "#d4af37", color: "white", border: "none", borderRadius: "7px", fontSize: "14px", fontWeight: 600, cursor: "pointer", fontFamily: "Cormorant Garamond, serif" }}
+              >
+                Apply to All {n} Tables
+              </button>
+              <div style={{ fontSize: "10px", color: "#aaa", textAlign: "center", marginTop: "5px" }}>
+                Only filled fields will be updated
+              </div>
             </div>
           </div>
         );
