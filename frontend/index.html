@@ -1175,6 +1175,120 @@
             });
           } catch (err) { console.error("Failed to remove layout image", err); }
         };
+
+        // ── Image editor (crop / resize) ─────────────────────────────────────
+        const [showImageEditor, setShowImageEditor] = React.useState(false);
+        const [editorOriginalSrc, setEditorOriginalSrc] = React.useState(null);
+        const [editorWorkingSrc, setEditorWorkingSrc] = React.useState(null);
+        const [cropBox, setCropBox] = React.useState({ x: 0, y: 0, w: 200, h: 150 });
+        const [editorDragState, setEditorDragState] = React.useState(null);
+        const [resizeScale, setResizeScale] = React.useState(100);
+        const imageEditorContainerRef = React.useRef(null);
+        const editorImgRef = React.useRef(null);
+
+        const handleOpenEditor = () => {
+          setEditorOriginalSrc(layoutImage);
+          setEditorWorkingSrc(layoutImage);
+          setResizeScale(100);
+          setShowImageEditor(true);
+        };
+
+        const initCropBox = () => {
+          if (!imageEditorContainerRef.current) return;
+          const { offsetWidth: w, offsetHeight: h } = imageEditorContainerRef.current;
+          setCropBox({ x: 0, y: 0, w, h });
+        };
+
+        // Returns actual rendered pixel bounds of the image inside the container
+        const getRenderedImageBounds = () => {
+          const img = editorImgRef.current;
+          const con = imageEditorContainerRef.current;
+          if (!img || !con) return null;
+          const cW = con.offsetWidth, cH = con.offsetHeight;
+          const nW = img.naturalWidth, nH = img.naturalHeight;
+          if (!nW || !nH) return null;
+          const imgR = nW / nH, conR = cW / cH;
+          let rW, rH, oX, oY;
+          if (imgR > conR) { rW = cW; rH = cW / imgR; oX = 0; oY = (cH - rH) / 2; }
+          else              { rH = cH; rW = cH * imgR; oX = (cW - rW) / 2; oY = 0; }
+          return { rW, rH, oX, oY, nW, nH };
+        };
+
+        const handleApplyCrop = () => {
+          const b = getRenderedImageBounds();
+          if (!b) return;
+          const { rW, rH, oX, oY, nW, nH } = b;
+          // Clamp crop box to the actual rendered image area
+          const cx = Math.max(0, cropBox.x - oX);
+          const cy = Math.max(0, cropBox.y - oY);
+          const cw = Math.min(cropBox.x + cropBox.w - oX, rW) - cx;
+          const ch = Math.min(cropBox.y + cropBox.h - oY, rH) - cy;
+          if (cw <= 0 || ch <= 0) return;
+          const sX = nW / rW, sY = nH / rH;
+          const canvas = document.createElement('canvas');
+          canvas.width  = Math.max(1, Math.round(cw * sX));
+          canvas.height = Math.max(1, Math.round(ch * sY));
+          canvas.getContext('2d').drawImage(
+            editorImgRef.current,
+            cx * sX, cy * sY, canvas.width, canvas.height,
+            0, 0, canvas.width, canvas.height
+          );
+          setEditorWorkingSrc(canvas.toDataURL('image/jpeg', 0.9));
+          setResizeScale(100);
+        };
+
+        const handleApplyResize = () => {
+          const img = editorImgRef.current;
+          if (!img) return;
+          const nW = Math.max(1, Math.round(img.naturalWidth  * resizeScale / 100));
+          const nH = Math.max(1, Math.round(img.naturalHeight * resizeScale / 100));
+          const canvas = document.createElement('canvas');
+          canvas.width = nW; canvas.height = nH;
+          canvas.getContext('2d').drawImage(img, 0, 0, nW, nH);
+          setEditorWorkingSrc(canvas.toDataURL('image/jpeg', 0.9));
+          setResizeScale(100);
+        };
+
+        const handleSaveEditor = async () => {
+          setLayoutImage(editorWorkingSrc);
+          setShowImageEditor(false);
+          try {
+            await fetch(`${API_BASE}/events/${eventId}/layout-image`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ layout_image: editorWorkingSrc }),
+            });
+          } catch (err) { console.error("Failed to save edited image", err); }
+        };
+
+        const startCropDrag = (type, e) => {
+          e.preventDefault(); e.stopPropagation();
+          setEditorDragState({ type, startX: e.clientX, startY: e.clientY, startBox: { ...cropBox } });
+        };
+
+        const handleEditorMouseMove = (e) => {
+          if (!editorDragState || !imageEditorContainerRef.current) return;
+          const dx = e.clientX - editorDragState.startX;
+          const dy = e.clientY - editorDragState.startY;
+          const { x, y, w, h } = editorDragState.startBox;
+          const cW = imageEditorContainerRef.current.offsetWidth;
+          const cH = imageEditorContainerRef.current.offsetHeight;
+          const MIN = 30;
+          let nb = { x, y, w, h };
+          const t = editorDragState.type;
+          if (t === 'move') {
+            nb.x = Math.max(0, Math.min(cW - w, x + dx));
+            nb.y = Math.max(0, Math.min(cH - h, y + dy));
+          } else {
+            if (t.includes('e')) nb.w = Math.max(MIN, Math.min(cW - x, w + dx));
+            if (t.includes('s')) nb.h = Math.max(MIN, Math.min(cH - y, h + dy));
+            if (t.includes('w')) { const nx = Math.max(0, Math.min(x + w - MIN, x + dx)); nb.w = x + w - nx; nb.x = nx; }
+            if (t.includes('n')) { const ny = Math.max(0, Math.min(y + h - MIN, y + dy)); nb.h = y + h - ny; nb.y = ny; }
+          }
+          setCropBox(nb);
+        };
+
+        const handleEditorMouseUp = () => setEditorDragState(null);
         const [tableNameEdit, setTableNameEdit] = useState("");
         const [capacityEdit, setCapacityEdit] = useState(1);
         const [shapeEdit, setShapeEdit] = useState("circle");
@@ -1597,6 +1711,13 @@
                   </button>
                   {layoutImage && (
                     <>
+                      <button
+                        className="btn-secondary"
+                        onClick={handleOpenEditor}
+                        title="Crop and resize background image"
+                      >
+                        ✏️ Edit
+                      </button>
                       <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                         <span style={{ fontSize: "11px", color: "#8b6f47", whiteSpace: "nowrap" }}>Opacity</span>
                         <input
@@ -1817,6 +1938,92 @@
                 onClose={() => setShowCreateModal(false)}
                 onSubmit={handleCreateTables}
               />
+            )}
+
+            {/* ── Image Editor Modal (crop / resize) ── */}
+            {showImageEditor && (
+              <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <div style={{ background: "white", borderRadius: "12px", padding: "24px", width: "min(740px, 96vw)", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
+                  <h3 style={{ fontFamily: "Cormorant Garamond, serif", fontSize: "22px", fontWeight: 600, marginBottom: "16px", color: "#2c1810" }}>
+                    Edit Background Image
+                  </h3>
+
+                  {/* Image + crop overlay */}
+                  <div
+                    ref={imageEditorContainerRef}
+                    style={{ position: "relative", width: "100%", height: "440px", background: "#111", overflow: "hidden", borderRadius: "8px", userSelect: "none" }}
+                    onMouseMove={handleEditorMouseMove}
+                    onMouseUp={handleEditorMouseUp}
+                    onMouseLeave={handleEditorMouseUp}
+                  >
+                    <img
+                      ref={editorImgRef}
+                      src={editorWorkingSrc}
+                      alt="editor"
+                      onLoad={initCropBox}
+                      style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", pointerEvents: "none" }}
+                    />
+                    {/* Crop box — box-shadow creates the dark overlay outside the selection */}
+                    <div
+                      style={{ position: "absolute", left: cropBox.x, top: cropBox.y, width: cropBox.w, height: cropBox.h,
+                               border: "2px solid white", boxShadow: "0 0 0 9999px rgba(0,0,0,0.55)",
+                               boxSizing: "border-box", cursor: "move" }}
+                      onMouseDown={(e) => startCropDrag("move", e)}
+                    >
+                      {/* Rule-of-thirds guides */}
+                      {[33.33, 66.66].map(p => (
+                        <React.Fragment key={p}>
+                          <div style={{ position:"absolute", left:`${p}%`, top:0, bottom:0, width:"1px", background:"rgba(255,255,255,0.35)", pointerEvents:"none" }} />
+                          <div style={{ position:"absolute", top:`${p}%`, left:0, right:0, height:"1px", background:"rgba(255,255,255,0.35)", pointerEvents:"none" }} />
+                        </React.Fragment>
+                      ))}
+                      {/* Corner handles */}
+                      {[["nw",{top:-5,left:-5}],["ne",{top:-5,right:-5}],["sw",{bottom:-5,left:-5}],["se",{bottom:-5,right:-5}]].map(([d,pos]) => (
+                        <div key={d} onMouseDown={(e) => startCropDrag(d, e)}
+                          style={{ position:"absolute", width:10, height:10, background:"white", cursor:`${d}-resize`, boxSizing:"border-box", ...pos }} />
+                      ))}
+                      {/* Edge handles */}
+                      {[
+                        ["n", {top:-4, left:"50%", marginLeft:-5, width:10, height:8}],
+                        ["s", {bottom:-4, left:"50%", marginLeft:-5, width:10, height:8}],
+                        ["e", {right:-4, top:"50%", marginTop:-5, width:8, height:10}],
+                        ["w", {left:-4, top:"50%", marginTop:-5, width:8, height:10}],
+                      ].map(([d,pos]) => (
+                        <div key={d} onMouseDown={(e) => startCropDrag(d, e)}
+                          style={{ position:"absolute", background:"white", cursor:`${d}-resize`, ...pos }} />
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Controls */}
+                  <div style={{ marginTop: "16px", display: "flex", flexDirection: "column", gap: "12px" }}>
+                    {/* Crop row */}
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                      <span style={{ fontSize: "13px", color: "#8b6f47", minWidth: "76px", fontWeight: 600 }}>✂️ Crop</span>
+                      <button onClick={handleApplyCrop} className="btn-primary" style={{ fontSize: "13px", padding: "6px 14px" }}>Apply Crop</button>
+                      <span style={{ fontSize: "11px", color: "#aaa" }}>Drag the box or its handles to select a region, then Apply</span>
+                    </div>
+                    {/* Resize row */}
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                      <span style={{ fontSize: "13px", color: "#8b6f47", minWidth: "76px", fontWeight: 600 }}>🔍 Resize</span>
+                      <input type="range" min="10" max="200" step="5" value={resizeScale}
+                        onChange={e => setResizeScale(Number(e.target.value))}
+                        style={{ width: "120px", accentColor: "#d4af37" }} />
+                      <span style={{ fontSize: "13px", color: "#2c1810", minWidth: "40px" }}>{resizeScale}%</span>
+                      <button onClick={handleApplyResize} className="btn-primary" style={{ fontSize: "13px", padding: "6px 14px" }}>Apply Resize</button>
+                    </div>
+                    {/* Footer */}
+                    <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end", borderTop: "1px solid #e8dfd0", paddingTop: "12px" }}>
+                      <button
+                        onClick={() => { setEditorWorkingSrc(editorOriginalSrc); setResizeScale(100); }}
+                        className="btn-secondary" style={{ fontSize: "13px" }}
+                      >↺ Reset</button>
+                      <button onClick={() => setShowImageEditor(false)} className="btn-secondary" style={{ fontSize: "13px" }}>Cancel</button>
+                      <button onClick={handleSaveEditor} className="btn-primary" style={{ fontSize: "13px" }}>💾 Save Changes</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
             )}
 
           </div>
