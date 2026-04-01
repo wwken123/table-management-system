@@ -22,7 +22,7 @@ app.use(cors({
   credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, '..', 'frontend')));
 
 // PostgreSQL connection pool
 const pool = new Pool({
@@ -777,6 +777,11 @@ app.get('/api/health', (req, res) => {
 // Redirect guest URLs to hash-based routing
 app.get('/guest/:qrCode', (req, res) => {
   res.redirect(`/#/guest/${req.params.qrCode}`);
+});
+
+// Catch-all: serve frontend for any non-API route
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'frontend', 'index.html'));
 });
 
 // Start server
